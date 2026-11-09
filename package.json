@@ -1,0 +1,14 @@
+{
+  "name": "ger360-api",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Гэр360 — үл хөдлөх хөрөнгийн зарын сайтын API сервер (хамааралгүй Node.js)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
