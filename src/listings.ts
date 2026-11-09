@@ -1,5 +1,7 @@
-// Зарын төрөл, баталгаажуулалт, D1 мөр <-> объект хувиргалт.
+// Зарын төрөл, баталгаажуулалт, Postgres мөр <-> объект хувиргалт.
 // Worker-оос гадна (scripts/import-data.ts, Node) ч ашигладаг тул зөвхөн стандарт Web API хэрэглэнэ.
+import { randomHex } from './crypto.ts';
+export { randomHex };
 
 export const CATEGORIES = ['apartment', 'house', 'land', 'office', 'shop', 'warehouse', 'garage', 'summer_house'];
 export const DISTRICTS = ['Баянзүрх', 'Баянгол', 'Сүхбаатар', 'Чингэлтэй', 'Хан-Уул', 'Сонгинохайрхан', 'Налайх', 'Багануур', 'Багахангай'];
@@ -13,7 +15,7 @@ export type Room = {
 };
 export type Tour = { startRoomId: string; rooms: Room[] };
 export type Listing = {
-  id: string; ownerToken: string; ownerPhone: string; sellerName: string; sellerType: string;
+  id: string; ownerId?: string; ownerToken?: string; ownerPhone: string; sellerName: string; sellerType: string;
   category: string; dealType: string; title: string; price: number; pricePerM2?: number;
   rooms?: number; area?: number; floor?: number; buildingFloors?: number; yearInUse?: number;
   floorMaterial?: string; balconies?: number; windowType?: string; windowCount?: number; doorType?: string;
@@ -29,25 +31,22 @@ export class HttpError extends Error {
   constructor(status: number, message: string) { super(message); this.status = status; }
 }
 
-export const randomHex = (bytes: number) =>
-  Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
-
 /* ---------- public view ---------- */
 export const promoRank = (l: Listing, t = Date.now()) =>
   (!l.placementUntil || Date.parse(l.placementUntil) < t) ? 0 : l.placement === 'top' ? 2 : l.placement === 'vip' ? 1 : 0;
 export const hasTour = (l: Pick<Listing, 'tour'>) => !!(l.tour && Array.isArray(l.tour.rooms) && l.tour.rooms.some((r) => r.status === 'ready'));
 export function pub(l: Listing) {
-  const { ownerPhone, ownerToken, ...rest } = l;
+  const { ownerPhone, ownerToken, ownerId, ...rest } = l;
   return { ...rest, hasTour: hasTour(l), promo: promoRank(l) };
 }
 
 /* ---------- Postgres row mapping ---------- */
 // Мөрөөс ирэх, баганад хадгалагддаг (өөрчлөгддөг) талбарууд. Бусад нь `data` (jsonb).
-const COLUMN_FIELDS = ['id', 'status', 'views', 'createdAt', 'expiresAt', 'ownerToken', 'ownerPhone'] as const;
+const COLUMN_FIELDS = ['id', 'status', 'views', 'createdAt', 'expiresAt', 'ownerId', 'ownerToken', 'ownerPhone'] as const;
 
 export type ListingRow = {
   no: number; status: string; views: number; created_at: Date | string; expires_at: Date | string;
-  owner_token: string; owner_phone: string; data: Record<string, unknown>;
+  owner_id: string | null; owner_token: string | null; owner_phone: string; data: Record<string, unknown>;
 };
 
 export function fromRow(r: ListingRow): Listing {
@@ -58,7 +57,7 @@ export function fromRow(r: ListingRow): Listing {
     // Хугацаа нь дууссан ч cron хараахан 'expired' болгоогүй зар
     status: r.status === 'active' && expiresAt.getTime() < Date.now() ? 'expired' : r.status,
     createdAt: new Date(r.created_at).toISOString(), expiresAt: expiresAt.toISOString(),
-    ownerToken: r.owner_token, ownerPhone: r.owner_phone,
+    ownerId: r.owner_id ?? undefined, ownerToken: r.owner_token ?? undefined, ownerPhone: r.owner_phone,
   } as Listing;
 }
 
@@ -76,7 +75,7 @@ export function toRow(l: Omit<Listing, 'id'> & { id?: string }) {
     garage: !!l.garage, leasing: !!l.leasing, has_tour: hasTour(l),
     seller_type: l.sellerType, placement: l.placement || 'free',
     placement_until: l.placementUntil ?? null, created_at: l.createdAt, expires_at: l.expiresAt,
-    views: l.views || 0, owner_token: l.ownerToken, owner_phone: l.ownerPhone,
+    views: l.views || 0, owner_id: l.ownerId ?? null, owner_token: l.ownerToken ?? null, owner_phone: l.ownerPhone,
     search_text: [l.title, l.description, loc.district, loc.khoroo, loc.address].map((s) => s ?? '').join(' ').toLowerCase(),
     data,
   };
@@ -88,6 +87,7 @@ const cleanNum = (v: unknown, min: number, max: number) => {
   const n = Number(v);
   return v !== '' && v != null && Number.isFinite(n) && n >= min && n <= max ? n : undefined;
 };
+const cleanInt = (v: unknown, min: number, max: number) => { const n = cleanNum(v, min, max); return n === undefined ? undefined : Math.round(n); };
 export { cleanStr };
 
 function cleanImg(o: any): Img | null {
@@ -118,7 +118,10 @@ function cleanTour(t: any): Tour | undefined {
   return { startRoomId: ids.has(t.startRoomId) ? t.startRoomId : rooms[0].id, rooms };
 }
 
-export function buildListing(b: any): Omit<Listing, 'id'> {
+export type Poster = { id: string; name: string; phone: string; role: 'admin' | 'agent' };
+
+/** Validates a new ad from the post wizard. Only logged-in admins and agents can post. */
+export function buildListing(b: any, user: Poster): Omit<Listing, 'id'> {
   const errors: string[] = [];
   const category = CATEGORIES.includes(b.category) ? b.category : null;
   if (!category) errors.push('Ангилал сонгоно уу');
@@ -134,27 +137,31 @@ export function buildListing(b: any): Omit<Listing, 'id'> {
   if (!district) errors.push('Дүүрэг сонгоно уу');
   const lat = cleanNum(loc.lat, 41, 52.5), lng = cleanNum(loc.lng, 87, 120);
   if (lat === undefined || lng === undefined) errors.push('Газрын зураг дээр байршлаа тэмдэглэнэ үү');
-  const sellerName = cleanStr(b.sellerName, 60);
+  // name and phone default to the account's; the wizard may override them per ad
+  const sellerName = cleanStr(b.sellerName, 60) || user.name;
   if (!sellerName) errors.push('Нэрээ оруулна уу');
-  const ownerPhone = cleanStr(b.sellerPhone, 20).replace(/\D/g, '');
+  const ownerPhone = cleanStr(b.sellerPhone, 20).replace(/\D/g, '') || user.phone || '';
   if (!/^\d{8}$/.test(ownerPhone)) errors.push('Утасны дугаар 8 оронтой байна');
   const photos = (Array.isArray(b.photos) ? b.photos : []).slice(0, 20).map(cleanImg).filter((p: Img | null): p is Img => !!p);
   if (errors.length) throw new HttpError(400, errors.join('. '));
   const placement = ['vip', 'top'].includes(b.placement) ? b.placement : 'free';
   const t = Date.now();
   return {
-    ownerToken: randomHex(16), ownerPhone,
-    sellerName, sellerType: ['owner', 'agent', 'company'].includes(b.sellerType) ? b.sellerType : 'owner',
+    ownerId: user.id, ownerPhone, sellerName,
+    // agents always post as agents; an admin may label the seller type
+    sellerType: user.role === 'agent' ? 'agent' : ['owner', 'agent', 'company'].includes(b.sellerType) ? b.sellerType : 'agent',
     category: category!, dealType, title, price: price!, pricePerM2: Math.round(price! / area!),
-    rooms: cleanNum(b.rooms, 0, 100), area, floor: cleanNum(b.floor, -5, 200), buildingFloors: cleanNum(b.buildingFloors, 1, 200),
-    yearInUse: cleanNum(b.yearInUse, 1900, 2100), floorMaterial: cleanStr(b.floorMaterial, 40) || undefined,
-    balconies: cleanNum(b.balconies, 0, 20), windowType: cleanStr(b.windowType, 40) || undefined,
-    windowCount: cleanNum(b.windowCount, 0, 200), doorType: cleanStr(b.doorType, 40) || undefined,
+    rooms: cleanInt(b.rooms, 0, 100), area, floor: cleanInt(b.floor, -5, 200), buildingFloors: cleanInt(b.buildingFloors, 1, 200),
+    yearInUse: cleanInt(b.yearInUse, 1900, 2100), floorMaterial: cleanStr(b.floorMaterial, 40) || undefined,
+    balconies: cleanInt(b.balconies, 0, 20), windowType: cleanStr(b.windowType, 40) || undefined,
+    windowCount: cleanInt(b.windowCount, 0, 200), doorType: cleanStr(b.doorType, 40) || undefined,
     garage: !!b.garage, leasing: !!b.leasing,
     paymentTerms: (Array.isArray(b.paymentTerms) ? b.paymentTerms : []).filter((p: string) => PAY_TERMS.includes(p)),
     location: { city: 'Улаанбаатар', district: district!, khoroo: cleanStr(loc.khoroo, 40), address: cleanStr(loc.address, 160), lat, lng },
     description: cleanStr(b.description, 5000), photos, tour: cleanTour(b.tour),
     placement, placementUntil: placement === 'free' ? undefined : new Date(t + 7 * DAY).toISOString(),
-    status: 'pending', views: 0, createdAt: new Date(t).toISOString(), expiresAt: new Date(t + 30 * DAY).toISOString(),
+    // agents' ads wait for admin approval; the admin's own ads go live directly
+    status: user.role === 'admin' ? 'active' : 'pending',
+    views: 0, createdAt: new Date(t).toISOString(), expiresAt: new Date(t + 30 * DAY).toISOString(),
   };
 }

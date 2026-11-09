@@ -3,5 +3,15 @@
   "name": "listing-server-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
+  // postgres.js (Neon) needs Node.js compatibility (TCP sockets via node:net/tls shims)
+  "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+
+  // Зураг: R2 bucket (`npx wrangler r2 bucket create ger360-uploads`)
+  "r2_buckets": [{ "binding": "UPLOADS", "bucket_name": "ger360-uploads" }]
+
+  // Өгөгдөл: Neon. Хамгийн энгийн нь `npx wrangler secret put DATABASE_URL`.
+  // Production-д холболтыг хурдасгах бол Hyperdrive үүсгээд доорхыг нээнэ (код автоматаар ашиглана):
+  //   npx wrangler hyperdrive create ger360-neon --connection-string="postgresql://...neon.tech/neondb?sslmode=require"
+  // ,"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<hyperdrive-id>", "localConnectionString": "postgresql://postgres:postgres@127.0.0.1:5433/postgres" }]
 }

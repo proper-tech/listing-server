@@ -1,1 +1,12 @@
-ADMIN_KEY=admin
+# Хуулж ".dev.vars" нэртэй файл үүсгэнэ (git-д орохгүй). `wrangler dev` болон scripts/*.ts уншина.
+
+# Neon → Dashboard → Connect → connection string.
+#   postgresql://USER:PASSWORD@ep-xxxx.REGION.aws.neon.tech/neondb?sslmode=require
+# Компьютер дээрх Postgres (`npm run db:local`) ашиглах бол:
+#   postgresql://postgres:postgres@127.0.0.1:5433/postgres
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/postgres
+
+# Анхны админ — `npm run db:migrate` админ байхгүй үед үүсгэнэ.
+# ADMIN_PASSWORD өгөөгүй бол "admin" (анх нэвтрэхэд заавал солино).
+ADMIN_EMAIL=
+ADMIN_PASSWORD=

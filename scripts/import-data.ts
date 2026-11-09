@@ -1,21 +1,26 @@
-// data/db.json + uploads/ → D1 + R2.
-//   node scripts/import-data.ts --local            (wrangler dev-ийн локал D1/R2)
-//   node scripts/import-data.ts --remote           (Cloudflare дээрх D1/R2)
-//   ... --force                                    (D1-д зар байгаа ч устгаад дахин оруулна)
-// data/db.json байхгүй бол seed.cjs-ээр жишээ өгөгдөл, зураг үүсгэнэ.
+// data/db.json + uploads/ → Postgres (Neon) + R2.
+//   node scripts/import-data.ts --local            (Postgres: .dev.vars-ийн DATABASE_URL, R2: wrangler dev-ийн локал)
+//   node scripts/import-data.ts --remote           (Postgres: DATABASE_URL, R2: Cloudflare дээрх bucket)
+//   ... --force                                    (Postgres-д зар байгаа ч устгаад дахин оруулна)
+//   ... --skip-images                              (R2 руу зураг хуулахгүй)
+// data/db.json байхгүй бол seed.cjs-ээр жишээ өгөгдөл, зураг үүсгэнэ. Эхлээд `npm run db:migrate`.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import postgres from 'postgres';
 import { noFromId, toRow, type Listing } from '../src/listings.ts';
+import { hashPassword } from '../src/crypto.ts';
 
-const DB_NAME = 'ger360';
 const BUCKET = 'ger360-uploads';
 const root = path.resolve(import.meta.dirname, '..');
 const args = process.argv.slice(2);
 const target = args.includes('--remote') ? '--remote' : args.includes('--local') ? '--local' : null;
 if (!target) { console.error('--local эсвэл --remote гэж зааж өгнө үү.'); process.exit(1); }
 const force = args.includes('--force');
+
+try { process.loadEnvFile(path.join(root, '.dev.vars')); } catch { /* use real environment variables */ }
+if (!process.env.DATABASE_URL) { console.error('DATABASE_URL алга (.dev.vars).'); process.exit(1); }
 
 const dbFile = path.join(root, 'data/db.json');
 const uploadDir = path.join(root, 'uploads');
@@ -25,40 +30,58 @@ if (!existsSync(dbFile)) {
   createRequire(import.meta.url)('./seed.cjs').seed({ dbFile, uploadDir });
 }
 
-const wrangler = (...a: string[]) =>
-  execFileSync('npx', ['wrangler', ...a], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+/* ---------- Postgres ---------- */
+const sql = postgres(process.env.DATABASE_URL, { max: 1, onnotice: () => {} });
+const data = JSON.parse(readFileSync(dbFile, 'utf8')) as { nextNo?: number; listings: Listing[]; reports?: any[] };
+try {
+  const [{ n: existing }] = await sql<{ n: number }[]>`select count(*)::int as n from listings`;
+  if (existing > 0 && !force) {
+    console.error(`Postgres дээр аль хэдийн ${existing} зар байна. Устгаад дахин оруулах бол --force нэмнэ үү.`);
+    process.exit(1);
+  }
+  await sql.begin(async (tx) => {
+    await tx`delete from reports`;
+    await tx`delete from listings`;
+    for (const l of data.listings) {
+      const no = noFromId(l.id);
+      if (no === null) throw new Error(`Зарын id "${l.id}" нь L<тоо> хэлбэртэй биш`);
+      const row: Record<string, unknown> = { no, ...toRow(l) };
+      const cols = Object.keys(row);
+      const vals = cols.map((k, i) => `$${i + 1}${k === 'data' ? '::jsonb' : ''}`);
+      // postgres.js serializes the jsonb `data` object itself — don't JSON.stringify it (it would be stored as a string)
+      await tx.unsafe(`insert into listings (${cols.join(', ')}) values (${vals.join(', ')})`, Object.values(row) as any[]);
+    }
+    for (const r of data.reports || []) {
+      await tx`insert into reports (id, listing_id, reason, note, created_at)
+               values (${r.id}, ${r.listingId}, ${r.reason}, ${r.note || ''}, ${r.createdAt})`;
+    }
+    // Устгагдсан зарын дугаарыг дахин ашиглахгүйн тулд дараагийн дугаарыг nextNo-оос эхлүүлнэ
+    await tx`select setval(pg_get_serial_sequence('listings', 'no'),
+             greatest((select coalesce(max(no), 100000) from listings), ${(data.nextNo || 100001) - 1}::int))`;
 
-/* ---------- D1 ---------- */
-const existing = JSON.parse(wrangler('d1', 'execute', DB_NAME, target, '--json', '--command', 'SELECT COUNT(*) AS n FROM listings'))[0].results[0].n;
-if (existing > 0 && !force) {
-  console.error(`D1 (${target}) дээр аль хэдийн ${existing} зар байна. Устгаад дахин оруулах бол --force нэмнэ үү.`);
-  process.exit(1);
+    // Жишээ агентлагийн заруудыг эзэмших агент (зөвхөн жишээ өгөгдөлд, агент огт байхгүй үед)
+    const [{ agents }] = await tx<{ agents: number }[]>`select count(*)::int as agents from users where role = 'agent'`;
+    const demo = data.listings.some((l) => String(l.ownerToken || '').startsWith('demo-') && l.ownerPhone === '99000004');
+    if (agents === 0 && demo) {
+      await tx`insert into users (id, name, email, phone, role, must_change_password, password)
+               values ('u-demo-agent', 'Гэр Агент ХХК', 'agent@example.com', '99000004', 'agent', false, ${await hashPassword('agent1234')})`;
+      console.log('Жишээ агент: agent@example.com / "agent1234"');
+    }
+    // Эзэмшигчгүй заруудыг ижил утастай агентад холбоно
+    await tx`update listings l set owner_id = u.id from users u
+             where l.owner_id is null and u.role = 'agent' and u.phone <> '' and u.phone = l.owner_phone`;
+  });
+  console.log(`Postgres: ${data.listings.length} зар, ${(data.reports || []).length} гомдол оруулав.`);
+} finally {
+  await sql.end();
 }
-
-const db = JSON.parse(readFileSync(dbFile, 'utf8')) as { nextNo: number; listings: Listing[]; reports: any[] };
-const lit = (v: unknown) => (v === null || v === undefined ? 'NULL' : typeof v === 'number' ? String(v) : `'${String(v).replace(/'/g, "''")}'`);
-const insert = (table: string, row: Record<string, unknown>) =>
-  `INSERT INTO ${table} (${Object.keys(row).join(', ')}) VALUES (${Object.values(row).map(lit).join(', ')});`;
-
-const sql = ['DELETE FROM reports;', 'DELETE FROM listings;'];
-for (const l of db.listings) {
-  const no = noFromId(l.id);
-  if (no === null) throw new Error(`Зарын id "${l.id}" нь L<тоо> хэлбэртэй биш`);
-  sql.push(insert('listings', { no, ...toRow(l) }));
-}
-for (const r of db.reports) {
-  sql.push(insert('reports', { id: r.id, listing_id: r.listingId, reason: r.reason, note: r.note || '', created_at: r.createdAt }));
-}
-// Устгагдсан зарын дугаарыг дахин ашиглахгүйн тулд дараагийн дугаарыг nextNo-оос эхлүүлнэ
-if (db.nextNo) sql.push(`UPDATE sqlite_sequence SET seq = MAX(seq, ${db.nextNo - 1}) WHERE name = 'listings';`);
-
-const sqlFile = path.join(root, '.wrangler/import.sql');
-mkdirSync(path.dirname(sqlFile), { recursive: true });
-writeFileSync(sqlFile, sql.join('\n'));
-wrangler('d1', 'execute', DB_NAME, target, '--yes', '--file', sqlFile);
-console.log(`D1: ${db.listings.length} зар, ${db.reports.length} гомдол оруулав.`);
 
 /* ---------- R2 ---------- */
+if (args.includes('--skip-images')) process.exit(0);
+// run wrangler's JS entry with this Node (no shell, works the same on Windows/macOS/Linux)
+const wranglerBin = path.join(root, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
+const wrangler = (...a: string[]) =>
+  execFileSync(process.execPath, [wranglerBin, ...a], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
 const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
 const walk = (dir: string): string[] =>
   readdirSync(dir).flatMap((n) => { const p = path.join(dir, n); return statSync(p).isDirectory() ? walk(p) : [p]; });
