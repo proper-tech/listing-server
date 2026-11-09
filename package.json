@@ -1,14 +1,29 @@
 {
   "name": "ger360-api",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Гэр360 — үл хөдлөх хөрөнгийн зарын сайтын API сервер (хамааралгүй Node.js)",
-  "main": "server.js",
+  "type": "module",
+  "description": "Гэр360 — үл хөдлөх хөрөнгийн зарын сайтын API (Cloudflare Workers + Hono, D1, R2)",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "wrangler dev --port 4000",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "cf-typegen": "wrangler types",
+    "db:migrate:local": "wrangler d1 migrations apply ger360 --local",
+    "db:migrate:remote": "wrangler d1 migrations apply ger360 --remote",
+    "import:local": "node scripts/import-data.ts --local",
+    "import:remote": "node scripts/import-data.ts --remote"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.18"
+  },
+  "dependencies": {
+    "hono": "^4.13.17",
+    "postgres": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.158.0"
   }
 }
