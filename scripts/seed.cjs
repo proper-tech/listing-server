@@ -380,4 +380,13 @@ function seedListings() {
 /** Demo images are files on disk, demo listings are rows in Postgres (inserted by server.js). */
 const demoImagesPresent = (uploadDir) => fs.existsSync(path.join(uploadDir, 'demo', 'a-living.png')) && fs.existsSync(path.join(uploadDir, 'demo-capture', 'IMG_12.png'));
 
-module.exports = { generateImages, seedListings, demoImagesPresent };
+/** Writes demo images to uploadDir and the demo listings to a JSON file (old format, used by import scripts). */
+function seed({ dbFile, uploadDir }) {
+  const t0 = Date.now();
+  generateImages(uploadDir);
+  const listings = seedListings();
+  fs.writeFileSync(dbFile, JSON.stringify({ nextNo: 100018, listings, reports: [] }));
+  console.log(`Жишээ өгөгдөл бэлэн (${listings.length} зар, ${((Date.now() - t0) / 1000).toFixed(1)} сек).`);
+}
+
+module.exports = { seed, generateImages, seedListings, demoImagesPresent };

@@ -1,6 +1,8 @@
 node_modules/
-# Ажиллах үеийн өгөгдөл — анх асаахад seed.js автоматаар үүсгэнэ
+.wrangler/
+.dev.vars*
+!.dev.vars.example
+.env*
+# Хуучин Node серверийн өгөгдөл — scripts/import-data.ts-ээр D1/R2 руу оруулна (байхгүй бол seed.cjs үүсгэнэ)
 data/
 uploads/
-.env*
-!.env.example
