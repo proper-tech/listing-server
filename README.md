@@ -19,6 +19,7 @@ npm install
 `.dev.vars.example`-г `.dev.vars` нэрээр хуулна (git-д орохгүй). `DATABASE_URL`-д аль нэгийг нь тавина:
 
 - **Neon:** [neon.tech](https://neon.tech) → project үүсгэх → Dashboard → **Connect** → connection string (`…neon.tech/neondb?sslmode=require`).
+  Neon-ий өгсөн хэлбэрээр нь (`&channel_binding=require`-тэй ч) тавьж болно — Worker энэ параметрийг автоматаар хасдаг (Workers-ийн socket-д дэмжигддэггүй), холболт TLS-ээр шифрлэгдсэн хэвээр.
 - **Компьютер дээрх Postgres** (Neon-гүй турших): `postgresql://postgres:postgres@127.0.0.1:5433/postgres` — доорх `npm run db:local`-ыг тусдаа терминалд асаана.
 
 Дараа нь хүснэгт үүсгээд жишээ өгөгдөл оруулна:

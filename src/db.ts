@@ -15,7 +15,20 @@ export function connect(url: string): Sql {
 }
 
 export function databaseUrl(env: { HYPERDRIVE?: { connectionString: string }; DATABASE_URL?: string }) {
-  const url = env.HYPERDRIVE?.connectionString || env.DATABASE_URL;
-  if (!url) throw new Error('DATABASE_URL (эсвэл HYPERDRIVE) тохируулаагүй байна');
-  return url;
+  if (env.HYPERDRIVE?.connectionString) return env.HYPERDRIVE.connectionString;
+  if (!env.DATABASE_URL) throw new Error('DATABASE_URL (эсвэл HYPERDRIVE) тохируулаагүй байна');
+  return forWorkers(env.DATABASE_URL);
+}
+
+/** Neon's copy-paste URL has `channel_binding=require`. Channel binding needs the server's TLS
+ *  certificate, which the Workers socket API doesn't expose, so Neon closes the connection.
+ *  Drop it in the Worker (the connection stays TLS-encrypted via sslmode=require). */
+function forWorkers(url: string) {
+  try {
+    const u = new URL(url);
+    u.searchParams.delete('channel_binding');
+    return u.toString();
+  } catch {
+    return url;
+  }
 }
