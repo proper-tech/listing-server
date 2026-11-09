@@ -74,9 +74,10 @@ npm run db:local
 ## Байршуулах (deploy)
 
 1. R2 bucket: `npx wrangler r2 bucket create ger360-uploads`
-2. Neon-д хүснэгт үүсгэх (`.dev.vars`-ийн `DATABASE_URL` Neon руу заасан үед): `npm run db:migrate`
-   — өгөгдөл шилжүүлэх бол `npm run import:remote` (Postgres + Cloudflare R2).
-3. Worker-т Neon-ий хаяг: `npx wrangler secret put DATABASE_URL`
+2. Production Neon: `.dev.vars.production` (git-д орохгүй) файлд `DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` (12+ тэмдэгт) бичээд:
+   `npm run db:migrate:prod` — хүснэгт үүсгэж, анхны админыг үүсгэнэ. Production дээр `admin`/`admin` анхдагч админ хэзээ ч үүсэхгүй.
+   (Тест өгөгдлийн сан `.dev.vars`-д — `npm run db:migrate`, `npm run import:local`.)
+3. Worker-т production Neon-ий хаяг: `npx wrangler secret put DATABASE_URL`
 4. `npm run deploy` → олгосон `https://listing-server-api.<account>.workers.dev` хаягийг frontend-ийн Vercel төсөлд `API_URL` болгоно.
 5. Сонголтоор — хурдасгах: Hyperdrive үүсгээд `wrangler.jsonc`-д `HYPERDRIVE` binding нэмнэ (тайлбар файлд бий). Код автоматаар түүнийг ашиглана.
 

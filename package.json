@@ -11,6 +11,7 @@
     "cf-typegen": "wrangler types",
     "db:local": "node -e \"require('fs').mkdirSync('data',{recursive:true})\" && pglite-server --db=./data/pglite --port=5433 --max-connections=10",
     "db:migrate": "node scripts/migrate.ts",
+    "db:migrate:prod": "node scripts/migrate.ts --production",
     "import:local": "node scripts/import-data.ts --local",
     "import:remote": "node scripts/import-data.ts --remote"
   },
