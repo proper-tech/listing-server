@@ -1,14 +1,23 @@
 {
   "name": "ger360-api",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Гэр360 — үл хөдлөх хөрөнгийн зарын сайтын API сервер (хамааралгүй Node.js)",
+  "description": "Гэр360 — үл хөдлөх хөрөнгийн зарын сайтын API сервер (Node.js + PostgreSQL/Neon)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "dev:local": "node -e \"require('fs').mkdirSync('data',{recursive:true})\" && pglite-server --db=./data/pglite --port=5433 --max-connections=10 --run \"node --watch server.js\" --include-database-url",
+    "import-json": "node scripts/import-json.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.12"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.15",
+    "@electric-sql/pglite-socket": "^0.2.18"
   }
 }

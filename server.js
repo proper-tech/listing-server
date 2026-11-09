@@ -1,24 +1,22 @@
 'use strict';
 // Гэр360 API — үл хөдлөх хөрөнгийн зарын сайтын backend.
-// Хамаарал шаардахгүй Node.js API сервер: JSON API, зураг хадгалах, /uploads.
+// Node.js API сервер: JSON API, нэвтрэлт (админ, агент), зураг хадгалах (/uploads).
+// Өгөгдөл: PostgreSQL (Neon) — db.js. Зураг: диск (STORAGE_DIR/uploads).
 // Frontend (listing-web, Next.js) /api болон /uploads хүсэлтийг API_URL-аар энд дамжуулна.
+const path = require('path');
+try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env file: use real environment variables */ }
+
 const http = require('http');
 const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
+const db = require('./db');
 
 // PORT-ийг Railway/Render/Fly зэрэг хостинг автоматаар өгнө.
 const PORT = Number(process.env.PORT || process.env.API_PORT) || 4000;
-const ADMIN_KEY = process.env.ADMIN_KEY || 'admin';
-if (process.env.NODE_ENV === 'production' && ADMIN_KEY === 'admin') {
-  console.error('ADMIN_KEY орчны хувьсагчийг production дээр заавал тохируулна уу.');
-  process.exit(1);
-}
-// Өгөгдөл (data/) болон зураг (uploads/) хадгалах хавтас. Production дээр байнгын диск (volume) руу заана.
+const PRODUCTION = process.env.NODE_ENV === 'production';
+// Зураг (uploads/) хадгалах хавтас. Production дээр байнгын диск (volume) руу заана.
 const STORAGE_DIR = path.resolve(process.env.STORAGE_DIR || __dirname);
 const UP = path.join(STORAGE_DIR, 'uploads');
-const DATA_DIR = path.join(STORAGE_DIR, 'data');
-const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 const CATEGORIES = ['apartment', 'house', 'land', 'office', 'shop', 'warehouse', 'garage', 'summer_house'];
 const DISTRICTS = ['Баянзүрх', 'Баянгол', 'Сүхбаатар', 'Чингэлтэй', 'Хан-Уул', 'Сонгинохайрхан', 'Налайх', 'Багануур', 'Багахангай'];
@@ -26,30 +24,14 @@ const PAY_TERMS = ['Бэлэн', 'Банкны зээл', 'Ипотек', 'Ба�
 const DAY = 864e5;
 
 fs.mkdirSync(path.join(UP, 'u'), { recursive: true });
-fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(DB_FILE)) {
-  console.log('Анхны жишээ өгөгдөл, зургуудыг үүсгэж байна (хэдэн секунд)...');
-  require('./seed').seed({ dbFile: DB_FILE, uploadDir: UP });
-}
-const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-let saveTimer = null;
-function save() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    fs.writeFileSync(DB_FILE + '.tmp', JSON.stringify(db));
-    fs.renameSync(DB_FILE + '.tmp', DB_FILE);
-  }, 150);
-}
 
 const MIME = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
-  '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon',
 };
 
 function httpError(status, message) { return Object.assign(new Error(message), { status }); }
-function send(res, code, obj) {
-  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+function send(res, code, obj, headers = {}) {
+  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers });
   res.end(JSON.stringify(obj));
 }
 function readBody(req, limit) {
@@ -72,77 +54,17 @@ async function readJSON(req) {
 /* ---------- helpers ---------- */
 const now = () => Date.now();
 const promoRank = (l) => (!l.placementUntil || Date.parse(l.placementUntil) < now()) ? 0 : l.placement === 'top' ? 2 : l.placement === 'vip' ? 1 : 0;
-const hasTour = (l) => !!(l.tour && Array.isArray(l.tour.rooms) && l.tour.rooms.some((r) => r.status === 'ready'));
 function pub(l) {
-  const { ownerPhone, ownerToken, ...rest } = l;
-  return { ...rest, hasTour: hasTour(l), promo: promoRank(l) };
+  const { ownerPhone, ownerId, ...rest } = l;
+  return { ...rest, promo: promoRank(l) };
 }
-function refreshExpiry() {
-  const t = now();
-  for (const l of db.listings) if (l.status === 'active' && Date.parse(l.expiresAt) < t) l.status = 'expired';
-}
-const findListing = (id) => db.listings.find((l) => l.id === id);
-const isAdmin = (req) => req.headers['x-admin-key'] === ADMIN_KEY;
 // Хүсэлт Vercel (Next.js rewrite) болон хостингийн proxy-гоор дамжиж ирдэг тул жинхэнэ IP x-forwarded-for-д байна.
 const clientIp = (req) => String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress;
-
-const num = (v) => { if (v === null || v === '' || v === undefined) return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
-
-function search(q) {
-  let items = db.listings.filter((l) => l.status === 'active');
-  const g = (k) => q.get(k);
-  if (g('deal')) items = items.filter((l) => l.dealType === g('deal'));
-  if (g('cat')) items = items.filter((l) => l.category === g('cat'));
-  if (g('district')) items = items.filter((l) => l.location.district === g('district'));
-  if (g('placement')) items = items.filter((l) => l.placement === g('placement') && promoRank(l) > 0);
-  const range = (minK, maxK, get) => {
-    const lo = num(g(minK)), hi = num(g(maxK));
-    if (lo !== null) items = items.filter((l) => get(l) != null && get(l) >= lo);
-    if (hi !== null) items = items.filter((l) => get(l) != null && get(l) <= hi);
-  };
-  range('priceMin', 'priceMax', (l) => l.price);
-  range('ppmMin', 'ppmMax', (l) => l.pricePerM2);
-  range('areaMin', 'areaMax', (l) => l.area);
-  range('floorMin', 'floorMax', (l) => l.floor);
-  range('bfMin', 'bfMax', (l) => l.buildingFloors);
-  range('yearMin', 'yearMax', (l) => l.yearInUse);
-  if (g('rooms')) {
-    const set = g('rooms').split(',').map(Number).filter(Boolean);
-    items = items.filter((l) => l.rooms != null && set.some((r) => (r >= 5 ? l.rooms >= 5 : l.rooms === r)));
-  }
-  if (g('notFirst') === '1') items = items.filter((l) => l.floor > 1);
-  if (g('notLast') === '1') items = items.filter((l) => l.floor && l.buildingFloors && l.floor < l.buildingFloors);
-  if (g('leasing') === '1') items = items.filter((l) => l.leasing);
-  if (g('tour') === '1') items = items.filter(hasTour);
-  if (g('garage') === '1') items = items.filter((l) => l.garage);
-  if (num(g('posted'))) items = items.filter((l) => Date.parse(l.createdAt) >= now() - num(g('posted')) * DAY);
-  if (g('seller') === 'owner') items = items.filter((l) => l.sellerType === 'owner');
-  if (g('seller') === 'agent') items = items.filter((l) => l.sellerType !== 'owner');
-  if (g('q')) {
-    const words = g('q').toLowerCase().split(/\s+/).filter(Boolean);
-    items = items.filter((l) => {
-      const hay = `${l.title} ${l.description} ${l.location.district} ${l.location.khoroo} ${l.location.address}`.toLowerCase();
-      return words.every((w) => hay.includes(w));
-    });
-  }
-  const sorters = {
-    new: (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
-    cheap: (a, b) => a.price - b.price,
-    expensive: (a, b) => b.price - a.price,
-    ppm2: (a, b) => (a.pricePerM2 ?? Infinity) - (b.pricePerM2 ?? Infinity),
-    area: (a, b) => (b.area ?? 0) - (a.area ?? 0),
-  };
-  const sorter = sorters[g('sort')] || sorters.new;
-  const plain = g('plain') === '1';
-  items.sort((a, b) => (plain ? 0 : promoRank(b) - promoRank(a)) || sorter(a, b));
-  const per = Math.min(60, num(g('per')) || 24);
-  const page = Math.max(1, num(g('page')) || 1);
-  return { total: items.length, page, per, items: items.slice((page - 1) * per, page * per).map(pub) };
-}
 
 /* ---------- validation ---------- */
 const cleanStr = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const cleanNum = (v, min, max) => { const n = Number(v); return v !== '' && v != null && Number.isFinite(n) && n >= min && n <= max ? n : undefined; };
+const cleanInt = (v, min, max) => { const n = cleanNum(v, min, max); return n === undefined ? undefined : Math.round(n); };
 function cleanImg(o) {
   if (!o || typeof o.src !== 'string' || !/^\/uploads\/[\w\-/]+\.(jpg|jpeg|png|webp)$/.test(o.src) || o.src.includes('..')) return null;
   return { src: o.src, width: cleanNum(o.width, 1, 20000) || 0, height: cleanNum(o.height, 1, 20000) || 0 };
@@ -169,7 +91,7 @@ function cleanTour(t) {
   rooms.forEach((r) => { r.hotspots = r.hotspots.filter((h) => ids.has(h.targetRoomId) && h.targetRoomId !== r.id); });
   return { startRoomId: ids.has(t.startRoomId) ? t.startRoomId : rooms[0].id, rooms };
 }
-function buildListing(b) {
+async function buildListing(b, user) {
   const errors = [];
   const category = CATEGORIES.includes(b.category) ? b.category : null;
   if (!category) errors.push('Ангилал сонгоно уу');
@@ -185,30 +107,97 @@ function buildListing(b) {
   if (!district) errors.push('Дүүрэг сонгоно уу');
   const lat = cleanNum(loc.lat, 41, 52.5), lng = cleanNum(loc.lng, 87, 120);
   if (lat === undefined || lng === undefined) errors.push('Газрын зураг дээр байршлаа тэмдэглэнэ үү');
-  const sellerName = cleanStr(b.sellerName, 60);
+  const sellerName = cleanStr(b.sellerName, 60) || user.name;
   if (!sellerName) errors.push('Нэрээ оруулна уу');
-  const ownerPhone = cleanStr(b.sellerPhone, 20).replace(/\D/g, '');
+  const ownerPhone = cleanStr(b.sellerPhone, 20).replace(/\D/g, '') || user.phone || '';
   if (!/^\d{8}$/.test(ownerPhone)) errors.push('Утасны дугаар 8 оронтой байна');
   const photos = (Array.isArray(b.photos) ? b.photos : []).slice(0, 20).map(cleanImg).filter(Boolean);
   if (errors.length) throw httpError(400, errors.join('. '));
   const placement = ['vip', 'top'].includes(b.placement) ? b.placement : 'free';
   const t = now();
   return {
-    id: 'L' + db.nextNo++, ownerToken: crypto.randomBytes(16).toString('hex'), ownerPhone,
-    sellerName, sellerType: ['owner', 'agent', 'company'].includes(b.sellerType) ? b.sellerType : 'owner',
+    id: await db.nextListingId(), ownerId: user.id, ownerPhone, sellerName,
+    // agents always post as agents; an admin may label the seller type
+    sellerType: user.role === 'agent' ? 'agent' : ['owner', 'agent', 'company'].includes(b.sellerType) ? b.sellerType : 'agent',
     category, dealType, title, price, pricePerM2: Math.round(price / area),
-    rooms: cleanNum(b.rooms, 0, 100), area, floor: cleanNum(b.floor, -5, 200), buildingFloors: cleanNum(b.buildingFloors, 1, 200),
-    yearInUse: cleanNum(b.yearInUse, 1900, 2100), floorMaterial: cleanStr(b.floorMaterial, 40) || undefined,
-    balconies: cleanNum(b.balconies, 0, 20), windowType: cleanStr(b.windowType, 40) || undefined,
-    windowCount: cleanNum(b.windowCount, 0, 200), doorType: cleanStr(b.doorType, 40) || undefined,
+    rooms: cleanInt(b.rooms, 0, 100), area, floor: cleanInt(b.floor, -5, 200), buildingFloors: cleanInt(b.buildingFloors, 1, 200),
+    yearInUse: cleanInt(b.yearInUse, 1900, 2100), floorMaterial: cleanStr(b.floorMaterial, 40) || undefined,
+    balconies: cleanInt(b.balconies, 0, 20), windowType: cleanStr(b.windowType, 40) || undefined,
+    windowCount: cleanInt(b.windowCount, 0, 200), doorType: cleanStr(b.doorType, 40) || undefined,
     garage: !!b.garage, leasing: !!b.leasing,
     paymentTerms: (Array.isArray(b.paymentTerms) ? b.paymentTerms : []).filter((p) => PAY_TERMS.includes(p)),
     location: { city: 'Улаанбаатар', district, khoroo: cleanStr(loc.khoroo, 40), address: cleanStr(loc.address, 160), lat, lng },
     description: cleanStr(b.description, 5000), photos, tour: cleanTour(b.tour),
     placement, placementUntil: placement === 'free' ? undefined : new Date(t + 7 * DAY).toISOString(),
-    status: 'pending', views: 0, createdAt: new Date(t).toISOString(), expiresAt: new Date(t + 30 * DAY).toISOString(),
+    // agents' ads wait for admin approval; the admin's own ads go live directly
+    status: user.role === 'admin' ? 'active' : 'pending',
+    views: 0, createdAt: new Date(t).toISOString(), expiresAt: new Date(t + 30 * DAY).toISOString(),
   };
 }
+
+/* ---------- users & sessions ----------
+   Only admins and agents have accounts (no public sign-up: the admin creates agents).
+   Login: email + password. Passwords: scrypt + per-user salt. Sessions: random token in an
+   HttpOnly cookie; only its SHA-256 hash is stored in Postgres. */
+const SESSION_COOKIE = 'ger360_session';
+const SESSION_DAYS = 14;
+const ROLES = ['admin', 'agent'];
+const COOKIE_SECURE = process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === '1' : PRODUCTION;
+
+function hashPassword(pw) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return { salt, hash: crypto.scryptSync(pw, salt, 64).toString('hex') };
+}
+function checkPassword(user, pw) {
+  const got = crypto.scryptSync(String(pw), user.salt, 64);
+  const want = Buffer.from(user.hash, 'hex');
+  return want.length === got.length && crypto.timingSafeEqual(got, want);
+}
+const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+function publicUser(u) {
+  return { id: u.id, name: u.name, email: u.email || '', phone: u.phone, role: u.role, active: u.active, createdAt: u.createdAt, mustChangePassword: !!u.mustChangePassword };
+}
+const validPassword = (pw) => typeof pw === 'string' && pw.length >= 8 && pw.length <= 200;
+/** Login identifier: an email address (Gmail or any other), stored lower-case. */
+const normEmail = (v) => (typeof v === 'string' ? v.trim().toLowerCase().slice(0, 254) : '');
+const validEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e);
+const DEFAULT_ADMIN_EMAIL = 'admin@example.com';
+const DEMO_AGENT_EMAIL = 'agent@example.com';
+
+function parseCookies(req) {
+  const out = {};
+  for (const part of String(req.headers.cookie || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) { try { out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch { /* bad cookie */ } }
+  }
+  return out;
+}
+function sessionCookie(token, maxAgeSec) {
+  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${COOKIE_SECURE ? '; Secure' : ''}`;
+}
+async function currentUser(req) {
+  const token = parseCookies(req)[SESSION_COOKIE];
+  if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
+  return db.sessionUser(sha256(token));
+}
+async function requireUser(req, roles, { allowMustChange = false } = {}) {
+  const u = await currentUser(req);
+  if (!u) throw httpError(401, 'Нэвтэрнэ үү');
+  if (roles && !roles.includes(u.role)) throw httpError(403, 'Танд энэ үйлдлийг хийх эрх байхгүй');
+  // default / admin-set passwords must be replaced before doing anything else
+  if (u.mustChangePassword && !allowMustChange) throw httpError(403, 'Эхлээд нууц үгээ солино уу');
+  return u;
+}
+
+/* login attempts: 10 failures per IP+email in 15 minutes (in memory: one API instance) */
+const loginFails = new Map();
+function loginBlocked(key) {
+  const t = now(), arr = (loginFails.get(key) || []).filter((x) => t - x < 15 * 60e3);
+  loginFails.set(key, arr);
+  return arr.length >= 10;
+}
+function loginFailed(key) { loginFails.set(key, [...(loginFails.get(key) || []), now()]); }
+const DUMMY_USER = hashPassword(crypto.randomBytes(8).toString('hex')); // same work for unknown emails
 
 /* ---------- rate limit for "show phone" ---------- */
 const phoneHits = new Map();
@@ -222,70 +211,106 @@ function phoneAllowed(ip) {
 async function handleApi(req, res, u) {
   const p = u.pathname, m = req.method;
   let mm;
-  refreshExpiry();
+  await db.expireOld();
 
-  if (m === 'GET' && p === '/api/listings') return send(res, 200, search(u.searchParams));
-
-  if (m === 'GET' && p === '/api/stats') {
-    const counts = {};
-    for (const l of db.listings) if (l.status === 'active') {
-      const k = `${l.dealType}:${l.category}`; counts[k] = (counts[k] || 0) + 1;
-    }
-    return send(res, 200, { counts, total: db.listings.filter((l) => l.status === 'active').length });
+  if (m === 'GET' && p === '/api/listings') {
+    const r = await db.searchListings(u.searchParams);
+    return send(res, 200, { ...r, items: r.items.map(pub) });
   }
 
+  if (m === 'GET' && p === '/api/stats') return send(res, 200, await db.stats());
+
+  /* --- auth --- */
+  if (m === 'POST' && p === '/api/auth/login') {
+    const b = await readJSON(req);
+    const email = normEmail(b.email);
+    if (!validEmail(email)) throw httpError(400, 'Имэйл хаягаа зөв оруулна уу');
+    const key = `${clientIp(req)}|${email}`;
+    if (loginBlocked(key)) throw httpError(429, 'Хэт олон удаа буруу оролдлоо. 15 минутын дараа дахин оролдоно уу.');
+    const user = await db.userByEmail(email);
+    const ok = checkPassword(user || DUMMY_USER, b.password || '');
+    if (!user || !ok) { loginFailed(key); throw httpError(401, 'Имэйл эсвэл нууц үг буруу'); }
+    if (!user.active) throw httpError(403, 'Таны эрх идэвхгүй болсон байна. Админд хандана уу.');
+    loginFails.delete(key);
+    const token = crypto.randomBytes(32).toString('hex');
+    await db.createSession(sha256(token), user.id, SESSION_DAYS);
+    return send(res, 200, { user: publicUser(user) }, { 'set-cookie': sessionCookie(token, SESSION_DAYS * 86400) });
+  }
+
+  if (m === 'POST' && p === '/api/auth/logout') {
+    const token = parseCookies(req)[SESSION_COOKIE];
+    if (token) await db.deleteSession(sha256(token));
+    return send(res, 200, { ok: true }, { 'set-cookie': sessionCookie('', 0) });
+  }
+
+  if (m === 'GET' && p === '/api/auth/me') {
+    const user = await currentUser(req);
+    return send(res, 200, { user: user ? publicUser(user) : null });
+  }
+
+  if (m === 'POST' && p === '/api/auth/password') {
+    const user = await requireUser(req, ROLES, { allowMustChange: true });
+    const b = await readJSON(req);
+    if (!checkPassword(user, b.current || '')) throw httpError(400, 'Одоогийн нууц үг буруу');
+    if (!validPassword(b.next)) throw httpError(400, 'Шинэ нууц үг хамгийн багадаа 8 тэмдэгт байна');
+    if (b.next === b.current) throw httpError(400, 'Шинэ нууц үг хуучнаасаа өөр байх ёстой');
+    const updated = await db.updateUser(user.id, { ...hashPassword(b.next), mustChangePassword: false });
+    await db.deleteUserSessions(user.id, sha256(parseCookies(req)[SESSION_COOKIE] || '')); // log out other devices
+    return send(res, 200, { user: publicUser(updated) });
+  }
+
+  /* --- listings --- */
   if ((mm = p.match(/^\/api\/listings\/(\w+)$/)) && m === 'GET') {
-    const l = findListing(mm[1]);
-    const token = u.searchParams.get('token');
-    if (!l || (l.status !== 'active' && !(token && token === l.ownerToken) && !isAdmin(req))) throw httpError(404, 'Зар олдсонгүй');
-    if (u.searchParams.get('noview') !== '1' && l.status === 'active') { l.views++; save(); }
+    const l = await db.getListing(mm[1]);
+    const me = l && l.status !== 'active' ? await currentUser(req) : null;
+    if (!l || (l.status !== 'active' && !(me && (me.role === 'admin' || me.id === l.ownerId)))) throw httpError(404, 'Зар олдсонгүй');
+    if (u.searchParams.get('noview') !== '1' && l.status === 'active') { await db.addView(l.id); l.views++; }
     return send(res, 200, pub(l));
   }
 
   if ((mm = p.match(/^\/api\/listings\/(\w+)\/phone$/)) && m === 'GET') {
-    const l = findListing(mm[1]);
+    const l = await db.getListing(mm[1]);
     if (!l || l.status !== 'active') throw httpError(404, 'Зар олдсонгүй');
     if (!phoneAllowed(clientIp(req))) throw httpError(429, 'Хэт олон хүсэлт. Түр хүлээгээд дахин оролдоно уу.');
     return send(res, 200, { phone: l.ownerPhone });
   }
 
   if ((mm = p.match(/^\/api\/listings\/(\w+)\/report$/)) && m === 'POST') {
-    const l = findListing(mm[1]);
+    const l = await db.getListing(mm[1]);
     if (!l) throw httpError(404, 'Зар олдсонгүй');
     const b = await readJSON(req);
-    db.reports.push({ id: crypto.randomBytes(4).toString('hex'), listingId: l.id, reason: cleanStr(b.reason, 40) || 'other', note: cleanStr(b.note, 500), createdAt: new Date().toISOString() });
-    save();
+    await db.addReport({ id: crypto.randomBytes(6).toString('hex'), listingId: l.id, reason: cleanStr(b.reason, 40) || 'other', note: cleanStr(b.note, 500) });
     return send(res, 200, { ok: true });
   }
 
   if ((mm = p.match(/^\/api\/listings\/(\w+)\/owner$/)) && m === 'POST') {
-    const l = findListing(mm[1]);
+    const me = await requireUser(req, ROLES);
+    const l = await db.getListing(mm[1]);
     const b = await readJSON(req);
-    if (!l || !b.token || b.token !== l.ownerToken) throw httpError(403, 'Эрхгүй');
-    const t = now();
-    if (b.action === 'sold') l.status = 'sold';
-    else if (b.action === 'renew') { l.expiresAt = new Date(t + 30 * DAY).toISOString(); if (l.status === 'expired') l.status = 'active'; }
-    else if (b.action === 'bump') { if (l.status !== 'active') throw httpError(400, 'Зөвхөн идэвхтэй зарыг дээшлүүлнэ'); l.createdAt = new Date(t).toISOString(); }
-    else if (b.action === 'delete') { db.listings.splice(db.listings.indexOf(l), 1); }
+    if (!l) throw httpError(404, 'Зар олдсонгүй');
+    if (me.role !== 'admin' && l.ownerId !== me.id) throw httpError(403, 'Энэ зар таных биш');
+    if (b.action === 'sold') await db.setListingStatus(l.id, 'sold');
+    else if (b.action === 'renew') await db.renewListing(l.id);
+    else if (b.action === 'bump') { if (l.status !== 'active') throw httpError(400, 'Зөвхөн идэвхтэй зарыг дээшлүүлнэ'); await db.bumpListing(l.id); }
+    else if (b.action === 'delete') await db.deleteListing(l.id);
     else throw httpError(400, 'Үйлдэл буруу');
-    save();
     return send(res, 200, { ok: true });
   }
 
   if (m === 'POST' && p === '/api/listings') {
-    const l = buildListing(await readJSON(req));
-    db.listings.push(l); save();
-    return send(res, 201, { id: l.id, token: l.ownerToken, status: l.status });
+    const me = await requireUser(req, ROLES);
+    const l = await buildListing(await readJSON(req), me);
+    await db.insertListing(l);
+    return send(res, 201, { id: l.id, status: l.status });
   }
 
-  if (m === 'POST' && p === '/api/mine') {
-    const b = await readJSON(req);
-    const tokens = new Set((Array.isArray(b.tokens) ? b.tokens : []).slice(0, 200));
-    const items = db.listings.filter((l) => tokens.has(l.ownerToken)).map((l) => ({ ...pub(l), token: l.ownerToken }));
-    return send(res, 200, { items });
+  if (m === 'GET' && p === '/api/mine') {
+    const me = await requireUser(req, ROLES);
+    return send(res, 200, { items: (await db.listingsByOwner(me.id)).map(pub) });
   }
 
   if (m === 'POST' && p === '/api/upload') {
+    await requireUser(req, ROLES);
     const buf = await readBody(req, 25e6);
     let ext = null;
     if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) ext = 'jpg';
@@ -297,26 +322,69 @@ async function handleApi(req, res, u) {
     return send(res, 201, { src: `/uploads/u/${name}` });
   }
 
+  /* --- admin --- */
   if (p.startsWith('/api/admin/')) {
-    if (!isAdmin(req)) throw httpError(401, 'Админы түлхүүр буруу');
+    const me = await requireUser(req, ['admin']);
     if (m === 'GET' && p === '/api/admin/listings') {
-      const counts = {};
-      for (const r of db.reports) counts[r.listingId] = (counts[r.listingId] || 0) + 1;
-      const items = db.listings.map((l) => ({ ...pub(l), ownerPhone: l.ownerPhone, reports: counts[l.id] || 0 }))
-        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-      return send(res, 200, { items, reports: db.reports.slice(-200).reverse() });
+      const [items, reports] = await Promise.all([db.adminListings(), db.recentReports()]);
+      return send(res, 200, { items: items.map((l) => ({ ...pub(l), ownerPhone: l.ownerPhone, ownerName: l.ownerName, reports: l.reports })), reports });
     }
     if ((mm = p.match(/^\/api\/admin\/listings\/(\w+)$/)) && m === 'POST') {
-      const l = findListing(mm[1]);
+      const l = await db.getListing(mm[1]);
       if (!l) throw httpError(404, 'Зар олдсонгүй');
       const b = await readJSON(req);
-      if (b.action === 'delete') { db.listings.splice(db.listings.indexOf(l), 1); db.reports = db.reports.filter((r) => r.listingId !== l.id); }
+      if (b.action === 'delete') await db.deleteListing(l.id); // reports go with it (on delete cascade)
       else if (['active', 'rejected', 'pending', 'expired', 'sold'].includes(b.status)) {
-        l.status = b.status;
-        if (b.status === 'active') db.reports = db.reports.filter((r) => r.listingId !== l.id);
+        await db.setListingStatus(l.id, b.status);
+        if (b.status === 'active') await db.clearReports(l.id);
       } else throw httpError(400, 'Төлөв буруу');
-      save();
       return send(res, 200, { ok: true });
+    }
+
+    /* agent accounts (created by the admin; no public sign-up) */
+    if (m === 'GET' && p === '/api/admin/users') {
+      return send(res, 200, { users: (await db.listUsers()).map((x) => ({ ...publicUser(x), listings: x.listings })) });
+    }
+    if (m === 'POST' && p === '/api/admin/users') {
+      const b = await readJSON(req);
+      const name = cleanStr(b.name, 60);
+      const email = normEmail(b.email);
+      const phone = cleanStr(b.phone, 20).replace(/\D/g, '');
+      const errors = [];
+      if (!name) errors.push('Нэр оруулна уу');
+      if (!validEmail(email)) errors.push('Имэйл хаяг буруу байна');
+      else if (await db.emailTaken(email)) errors.push('Энэ имэйлтэй хэрэглэгч бүртгэлтэй байна');
+      if (!/^\d{8}$/.test(phone)) errors.push('Утасны дугаар (зар дээрх холбоо барих) 8 оронтой байна');
+      if (!validPassword(b.password)) errors.push('Нууц үг хамгийн багадаа 8 тэмдэгт');
+      if (errors.length) throw httpError(400, errors.join('. '));
+      const user = {
+        id: 'u-' + crypto.randomBytes(6).toString('hex'), name, email, phone, role: 'agent', active: true,
+        mustChangePassword: true, ...hashPassword(b.password),
+      };
+      await db.insertUser(user);
+      return send(res, 201, { user: publicUser(await db.userById(user.id)) });
+    }
+    if ((mm = p.match(/^\/api\/admin\/users\/([\w-]+)$/)) && m === 'POST') {
+      const user = await db.userById(mm[1]);
+      if (!user) throw httpError(404, 'Хэрэглэгч олдсонгүй');
+      const b = await readJSON(req);
+      if (user.id === me.id && b.active === false) throw httpError(400, 'Өөрийгөө идэвхгүй болгох боломжгүй');
+      const patch = {};
+      if (typeof b.name === 'string' && cleanStr(b.name, 60)) patch.name = cleanStr(b.name, 60);
+      if (b.email !== undefined) {
+        const email = normEmail(b.email);
+        if (!validEmail(email)) throw httpError(400, 'Имэйл хаяг буруу байна');
+        if (await db.emailTaken(email, user.id)) throw httpError(400, 'Энэ имэйлтэй хэрэглэгч бүртгэлтэй байна');
+        patch.email = email;
+      }
+      if (typeof b.active === 'boolean') patch.active = b.active;
+      if (b.password !== undefined) {
+        if (!validPassword(b.password)) throw httpError(400, 'Нууц үг хамгийн багадаа 8 тэмдэгт');
+        Object.assign(patch, hashPassword(b.password), { mustChangePassword: true });
+      }
+      const updated = await db.updateUser(user.id, patch);
+      if (patch.active === false || patch.hash) await db.deleteUserSessions(user.id);
+      return send(res, 200, { user: publicUser(updated) });
     }
   }
   throw httpError(404, 'API олдсонгүй');
@@ -339,16 +407,60 @@ function serveStatic(req, res, pathname) {
   });
 }
 
-http.createServer(async (req, res) => {
+/* ---------- startup: schema, demo data, first accounts ---------- */
+async function bootstrap() {
+  await db.migrate();
+  const seed = require('./seed');
+  const { rows: [{ n }] } = await db.q('select count(*) as n from listings');
+  const wantDemo = process.env.SEED_DEMO ? process.env.SEED_DEMO === '1' : !PRODUCTION;
+  if (n === 0 && wantDemo) {
+    console.log('Хоосон өгөгдлийн сан: жишээ зар оруулж байна…');
+    for (const l of seed.seedListings()) await db.insertListing(l);
+    await db.syncListingSequence();
+  }
+  // demo images live on disk: (re)generate them when the database has demo ads but this disk doesn't
+  const { rows: demoRows } = await db.q(`select 1 from listings where details->>'demo' = 'true' limit 1`);
+  if (demoRows.length && !seed.demoImagesPresent(UP)) {
+    console.log('Жишээ зургуудыг үүсгэж байна (хэдэн секунд)…');
+    seed.generateImages(UP);
+  }
+
+  if ((await db.countUsers('admin')) === 0) {
+    const email = normEmail(process.env.ADMIN_EMAIL) || DEFAULT_ADMIN_EMAIL;
+    const pw = process.env.ADMIN_PASSWORD;
+    if (PRODUCTION && !pw) {
+      console.error('Анхны админ үүсгэхийн тулд production дээр ADMIN_EMAIL, ADMIN_PASSWORD орчны хувьсагчийг тохируулна уу.');
+      process.exit(1);
+    }
+    await db.insertUser({ id: 'u-admin', name: 'Админ', email, role: 'admin', mustChangePassword: !pw, ...hashPassword(pw || 'admin') });
+    console.log(pw ? `Админ хэрэглэгч үүслээ: ${email}` : `Админ хэрэглэгч үүслээ: ${email} / "admin" — анх нэвтрээд нууц үгээ солино уу.`);
+  }
+  if ((await db.countUsers('agent')) === 0 && (await db.hasDemoAgencyListings())) {
+    await db.insertUser({ id: 'u-demo-agent', name: 'Гэр Агент ХХК', email: DEMO_AGENT_EMAIL, phone: '99000004', role: 'agent', ...hashPassword('agent1234') });
+    console.log(`Жишээ агент үүслээ: ${DEMO_AGENT_EMAIL} / "agent1234".`);
+  }
+  await db.linkListingsToAgents();
+}
+
+const server = http.createServer(async (req, res) => {
   try {
     const u = new URL(req.url, 'http://localhost');
     if (u.pathname.startsWith('/api/')) return await handleApi(req, res, u);
     if (u.pathname.startsWith('/uploads/')) return serveStatic(req, res, u.pathname);
-    if (u.pathname === '/health') return send(res, 200, { ok: true });
+    if (u.pathname === '/health') {
+      try { await db.q('select 1'); return send(res, 200, { ok: true, db: 'ok' }); } catch { return send(res, 503, { ok: false, db: 'down' }); }
+    }
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     return res.end('Гэр360 API.');
   } catch (e) {
     if (!e.status) console.error(e);
     if (!res.headersSent) send(res, e.status || 500, { error: e.status ? e.message : 'Серверийн алдаа' });
   }
-}).listen(PORT, () => console.log(`Гэр360 API: http://localhost:${PORT}  (хадгалах хавтас: ${STORAGE_DIR}, админ түлхүүр: ${ADMIN_KEY === 'admin' ? 'admin' : '***'})`));
+});
+
+bootstrap()
+  .then(() => server.listen(PORT, () => {
+    const host = (() => { try { return new URL(process.env.DATABASE_URL).host; } catch { return '?'; } })();
+    console.log(`Гэр360 API: http://localhost:${PORT}  (Postgres: ${host}, зураг: ${UP})`);
+  }))
+  .catch((e) => { console.error('Эхлүүлэхэд алдаа гарлаа:', e.message); process.exit(1); });
