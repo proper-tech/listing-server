@@ -38,3 +38,4 @@ Railway, Render (Persistent Disk), Fly.io (volume) гэх мэт. Vercel/serverl
 
 Анхаар: тохиргоо нэг instance-д зориулагдсан (өгөгдөл санах ойд + нэг файлд). Хэд хэдэн instance болгож өргөтгөж болохгүй.
 # listing-server
+# listing-server
