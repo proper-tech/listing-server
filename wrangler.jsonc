@@ -7,7 +7,9 @@
 
   // ---------- testing (анхдагч): `npm run dev`, `npm run deploy:testing` ----------
   "name": "listing-server-api-testing",
-  "vars": { "ENVIRONMENT": "testing" },
+  // COOKIE_SAMESITE: вэб (vercel.app), API (workers.dev) өөр site тул "None".
+  // Хоёуланг нэг домэйнд (жишээ нь example.mn + api.example.mn) оруулмагц "Lax" болгоно.
+  "vars": { "ENVIRONMENT": "testing", "COOKIE_SAMESITE": "None" },
   "d1_databases": [
     {
       "binding": "DB",
@@ -25,7 +27,8 @@
     // Binding-ууд өвлөгддөггүй тул энд дахин бичнэ.
     "production": {
       "name": "listing-server-api",
-      "vars": { "ENVIRONMENT": "production" },
+      // TODO: нэг домэйн авмагц "Lax" болгох
+      "vars": { "ENVIRONMENT": "production", "COOKIE_SAMESITE": "None" },
       "d1_databases": [
         {
           "binding": "DB",

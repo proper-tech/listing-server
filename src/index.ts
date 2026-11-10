@@ -9,7 +9,6 @@ import { sql } from "drizzle-orm";
 import { createDb } from "./db/index.ts";
 import { loadAuth } from "./auth.ts";
 import { authRoutes } from "./routes/auth.ts";
-import { testRoutes } from "./routes/test.ts";
 import type { AppEnv } from "./types.ts";
 
 const ALLOWED_ORIGINS = [
@@ -61,7 +60,6 @@ app.get("/health", async (c) => {
 });
 
 app.route("/auth", authRoutes);
-app.route("/test", testRoutes);
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 

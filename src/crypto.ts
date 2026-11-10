@@ -1,4 +1,4 @@
-// Worker-ийн криптограф: нууц үг (Argon2id, WASM), session токен (WebCrypto).
+// Worker-ийн нууц үгийн хэш (Argon2id, WASM).
 // Worker-т native addon (`argon2`, `bcrypt`) ажиллахгүй, мөн байтаас WASM ажиллах үед compile хийхийг
 // хориглодог — тиймээс `.wasm`-ийг wrangler bundle үед compile хийгдсэн модулиар import хийнэ.
 import Argon2 from "@phi-ag/argon2";
@@ -16,11 +16,3 @@ export const verifyPassword = async (password: string, encoded: string) =>
 // Байхгүй имэйлээр нэвтрэхэд ч мөн адил хугацаа зарцуулахын тулд (имэйл байгаа эсэхийг задруулахгүй)
 let dummyHash: Promise<string> | undefined;
 export const getDummyHash = () => (dummyHash ??= hashPassword(crypto.randomUUID()));
-
-const enc = new TextEncoder();
-const toHex = (bytes: ArrayBuffer | Uint8Array) =>
-  Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
-
-export const randomToken = () => toHex(crypto.getRandomValues(new Uint8Array(32)));
-export const sha256Hex = async (value: string) =>
-  toHex(await crypto.subtle.digest("SHA-256", enc.encode(value)));

@@ -15,7 +15,7 @@ Endpoint-ууд:
   - `POST /api/auth/change-password` `{ currentPassword, newPassword }` — шинэ JWT; бусад төхөөрөмжийн токенууд хүчингүй (`agents.token_version` +1)
   - JWT: HS256, 30 хоног, `{ sub, role, ver, iat, exp }`. Хүсэлт бүрт агентыг id-аар шалгана (идэвхгүй эсвэл `ver` зөрвөл хүчингүй)
   - Нууц үг: Argon2id (WASM, `@phi-ag/argon2`)
-  - Cookie `SameSite`: production → `Lax`, бусад (локал, testing) → `None`
+  - Cookie `SameSite`: `wrangler.jsonc`-ийн `COOKIE_SAMESITE`. Одоо хоёр орчинд `None` + `Partitioned` (вэб `vercel.app`, API `workers.dev` өөр site). Нэг домэйн авмагц `Lax` болгоно
   - `agent.mustChangePassword` үнэн бол `requireAuth`-тай route-ууд 403 `PASSWORD_CHANGE_REQUIRED` буцаана
   - Хамгаалалт: имэйлээр 15 минутад 5, IP-ээр 20 буруу оролдлого → 429; өөр сайтаас form POST → 403
 
@@ -25,13 +25,6 @@ Endpoint-ууд:
 npm run agent:create -- admin@example.mn "Нэр" admin --local
 npm run agent:create -- admin@example.mn "Нэр" admin --remote                     # testing
 npm run agent:create -- admin@example.mn "Нэр" admin --remote --env production
-```
-- `/api/test` — DB шалгах тест API (`test_items` хүснэгт), **зөвхөн testing/локал** (production-д 404):
-
-```bash
-curl -X POST localhost:4000/api/test -H 'content-type: application/json' -d '{"message":"hello"}'
-curl localhost:4000/api/test            # сүүлийн 50
-curl -X DELETE localhost:4000/api/test/1
 ```
 
 ## Орчнууд

@@ -2,9 +2,10 @@
 //
 // Токен: HS256 JWT { sub: агентын id, role, ver: token_version, iat, exp }, JWT_SECRET-ээр гарын үсэг зурна.
 // Клиент рүү зөвхөн HttpOnly cookie-оор (JS уншиж чадахгүй — XSS-ээс хамгаална).
-// Cookie: HttpOnly, Secure, SameSite —
-//   production → Lax  (API, вэб нэг site дээр байх ёстой, жишээ нь api.example.mn + example.mn)
-//   бусад      → None (localhost:3000 / vercel.app → workers.dev cross-site хүсэлт)
+// Cookie: HttpOnly, Secure, SameSite = wrangler.jsonc-ийн COOKIE_SAMESITE —
+//   "None" → вэб, API өөр site (vercel.app → workers.dev). Partitioned (CHIPS) нэмнэ —
+//            гуравдагч талын cookie хаадаг хөтөч ч вэбийн site-д хуваасан cookie-г хадгална.
+//   "Lax"  → вэб, API нэг site дээр (example.mn + api.example.mn) — илүү найдвартай, CSRF-ээс хамгаална.
 //
 // Хүчингүй болгох: хүсэлт бүрт агентыг id-аар (primary key) уншиж `active`, `ver === token_version`
 // шалгана — нууц үг солих, идэвхгүй болгоход хуучин токенууд шууд хүчингүй.
@@ -16,17 +17,15 @@ import { and, eq, getTableColumns } from "drizzle-orm";
 import { agents, type Agent, type PublicAgent } from "./db/schema.ts";
 import type { AppEnv } from "./types.ts";
 
-export const AUTH_COOKIE = "token";
+const AUTH_COOKIE = "token";
 const TOKEN_TTL = 30 * 24 * 60 * 60; // 30 хоног (секунд)
 const ALG = "HS256";
 
 const cookieOptions = (c: Context<AppEnv>) =>
-  ({
-    path: "/",
-    httpOnly: true,
-    secure: true, // SameSite=None-д заавал; localhost дээр хөтчүүд зөвшөөрдөг
-    sameSite: c.env.ENVIRONMENT === "production" ? "Lax" : "None",
-  }) as const;
+  (c.env.COOKIE_SAMESITE as string) === "Lax" // wrangler types-ийн төрөл одоогийн утга ("None") дээр тогтдог
+    ? ({ path: "/", httpOnly: true, secure: true, sameSite: "Lax" } as const)
+    : // SameSite=None, Partitioned-д Secure заавал; localhost дээр хөтчүүд зөвшөөрдөг
+      ({ path: "/", httpOnly: true, secure: true, sameSite: "None", partitioned: true } as const);
 
 const jwtSecret = (c: Context<AppEnv>) => {
   const secret = c.env.JWT_SECRET;

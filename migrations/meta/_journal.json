@@ -36,6 +36,13 @@
       "when": 1794301968368,
       "tag": "0004_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1794302852739,
+      "tag": "0005_cleanup",
+      "breakpoints": true
     }
   ]
 }
