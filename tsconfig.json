@@ -4,12 +4,12 @@
     "lib": ["es2023"],
     "module": "preserve",
     "moduleResolution": "bundler",
-    "types": ["./worker-configuration.d.ts", "node"],
+    "types": ["./worker-configuration.d.ts"],
     "strict": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["src", "scripts/*.ts", "worker-configuration.d.ts"]
+  "include": ["src", "worker-configuration.d.ts"]
 }

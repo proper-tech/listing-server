@@ -1,8 +1,8 @@
 node_modules/
 .wrangler/
 .dev.vars*
-!.dev.vars.example
 .env*
-# Хуучин Node серверийн өгөгдөл — scripts/import-data.ts-ээр D1/R2 руу оруулна (байхгүй бол seed.cjs үүсгэнэ)
+dist/
+# хуучин Postgres серверийн локал өгөгдөл
 data/
 uploads/

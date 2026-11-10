@@ -1,86 +1,88 @@
-# Гэр360 API
+# listing-server
 
-Гэр360 үл хөдлөх хөрөнгийн зарын сайтын backend — **Cloudflare Worker + Hono**.
+Үл хөдлөх хөрөнгийн зарын сайтын (listing-web) backend — **Cloudflare Worker + Hono**.
 
-- **Өгөгдөл:** PostgreSQL — [Neon](https://neon.tech) (`postgres.js`, сонголтоор Hyperdrive)
-- **Зураг:** Cloudflare R2 (`ger360-uploads`)
-- **Нэвтрэлт:** зөвхөн админ, агент (имэйл + нууц үг)
+- **Өгөгдөл:** Cloudflare D1 (`DB` binding) + [Drizzle ORM](https://orm.drizzle.team)
+- **Зураг:** Cloudflare R2 (`UPLOADS` binding)
 
-Frontend нь тусдаа төсөл — [`listing-web`](../ger360) (Next.js, Vercel). Тэр `/api/*`, `/uploads/*` хүсэлтийг `API_URL`-аар энд дамжуулна.
+Endpoint-ууд:
 
-## Анх тохируулах
-
-Node.js 22.18+ хэрэгтэй.
+- `GET /api/health` — D1, R2 холболт шалгах
+- `/api/test` — DB шалгах тест API (`test_items` хүснэгт), **зөвхөн testing/локал** (production-д 404):
 
 ```bash
-npm install
+curl -X POST localhost:4000/api/test -H 'content-type: application/json' -d '{"message":"hello"}'
+curl localhost:4000/api/test            # сүүлийн 50
+curl -X DELETE localhost:4000/api/test/1
 ```
+- `/api/mock` — mock схем (`mock_agents`, `mock_listings`, `mock_listing_images`), **зөвхөн testing/локал**:
+  - `GET /api/mock/agents` — агентууд + идэвхтэй зарын тоо
+  - `GET /api/mock/listings?dealType=sale&category=apartment&district=Хан-Уул&minPrice=&maxPrice=&rooms=2&q=&status=active|sold|expired|all&sort=newest|price_asc|price_desc|views&page=1&limit=20`
+  - `GET /api/mock/listings/:id` — агент, зурагтай
+  - `GET /api/mock/stats` — төлөв, ангилал, дүүргээр нэгтгэл
 
-`.dev.vars.example`-г `.dev.vars` нэрээр хуулна (git-д орохгүй). `DATABASE_URL`-д аль нэгийг нь тавина:
-
-- **Neon:** [neon.tech](https://neon.tech) → project үүсгэх → Dashboard → **Connect** → connection string (`…neon.tech/neondb?sslmode=require`).
-  Neon-ий өгсөн хэлбэрээр нь (`&channel_binding=require`-тэй ч) тавьж болно — Worker энэ параметрийг автоматаар хасдаг (Workers-ийн socket-д дэмжигддэггүй), холболт TLS-ээр шифрлэгдсэн хэвээр.
-- **Компьютер дээрх Postgres** (Neon-гүй турших): `postgresql://postgres:postgres@127.0.0.1:5433/postgres` — доорх `npm run db:local`-ыг тусдаа терминалд асаана.
-
-Дараа нь хүснэгт үүсгээд жишээ өгөгдөл оруулна:
+Mock өгөгдөл (`seeds/mock.sql`, давтан ажиллуулж болно — хоослоод дахин бөглөнө):
 
 ```bash
-npm run db:migrate
+npm run db:seed:local
+npm run db:seed:testing
 ```
 
-```bash
-npm run import:local
-```
+Seed нь `migrations/`-д биш тул production-д ордоггүй, production-д seed скрипт ч байхгүй.
 
-`db:migrate` нь `migrations/*.sql`-ийг дарааллаар нэг удаа ажиллуулж (давтан ажиллуулахад аюулгүй), анхны админыг үүсгэнэ.
-`import:local` нь `data/db.json` (байхгүй бол жишээ өгөгдөл үүсгэнэ)-ийг Postgres руу, `uploads/`-ийг wrangler-ийн локал R2 руу хуулна.
+## Орчнууд
+
+| | testing (анхдагч) | production |
+|---|---|---|
+| Worker | `listing-server-api-testing` | `listing-server-api` |
+| D1 | `listing-server-testing` | `listing-server-production` |
+| R2 | `listing-server-testing` | `listing-server-production` |
+| Deploy | `npm run deploy:testing` | `npm run deploy:production` |
+| Migration | `npm run db:migrate:testing` | `npm run db:migrate:production` |
+
+Тохиргоо `wrangler.jsonc`-д: дээд түвшин нь testing, `env.production` нь production.
+Binding-ууд env-д өвлөгддөггүй тул production-д дахин бичсэн — шинэ binding нэмбэл хоёуланд нь нэмнэ,
+дараа нь `npm run cf-typegen`.
 
 ## Ажиллуулах
 
 ```bash
+npm install
 npm run dev
 ```
 
-http://localhost:4000 (wrangler dev). Компьютер дээрх Postgres-ээр ажиллах бол өөр терминалд:
+http://localhost:4000/api/health → `{"ok":true,"environment":"local","db":"ok","storage":"ok"}`
+
+| Команд | D1 / R2 | `/api/health` → `environment` |
+|---|---|---|
+| `npm run dev` | **локал** (`.wrangler/state`) — testing/production-д хүрэхгүй | `"local"` |
+| `npm run dev:remote` | Cloudflare дээрх **testing** D1, R2 | `"testing"` |
+
+Анхаар: локал болон testing-д ижил `seeds/mock.sql` өгөгдөл байгаа тул `/api/mock/*` хоёуланд нь адилхан харагдана —
+аль орчинд байгааг `/api/health`-ийн `environment`-оор шалгана.
+
+## Өгөгдлийн сан (D1 + Drizzle ORM)
+
+- Схем: `src/db/schema.ts` (Drizzle `sqliteTable`)
+- Route дотор: `c.var.db` — жишээ нь `await c.var.db.select().from(users)`
+- `drizzle.config.ts` → migration-ууд `migrations/`-д үүснэ, wrangler тэднийг хэрэгжүүлнэ
+
+Схем өөрчлөх:
 
 ```bash
-npm run db:local
+npm run db:generate              # schema.ts-ээс migrations/0000_….sql үүсгэнэ
+npm run db:migrate:local         # локал
+npm run db:migrate:testing       # testing D1
+npm run db:migrate:production    # production D1
 ```
 
-([PGlite](https://pglite.dev) — жинхэнэ Postgres, `data/pglite`-д хадгална.)
+`migrations/meta/` (Drizzle-ийн snapshot)-ийг git-д хамт commit хийнэ — дараагийн `db:generate` түүнээс зөрүүг тооцно.
 
-## Нэвтрэлт
+## Байршуулах
 
-Зөвхөн **админ** болон **агент** нэвтэрнэ. Нийтийн бүртгэлгүй — агентыг админ Админ самбар → "Агентууд" хэсэгт үүсгэнэ.
+```bash
+npm run deploy:testing
+npm run deploy:production
+```
 
-- Анхны админ: `.dev.vars`-ийн `ADMIN_EMAIL` / `ADMIN_PASSWORD`. Өгөөгүй бол `admin@example.com` / `admin`, анх нэвтрэхэд заавал солино.
-- Жишээ агент (жишээ өгөгдөл импортлоход): `agent@example.com` / `agent1234`.
-- Нууц үг: PBKDF2-SHA256 (WebCrypto, 100 000 давталт). Сесс: HttpOnly cookie, Postgres-д зөвхөн токены SHA-256 хэш.
-- 15 минутад 10 буруу оролдлого хаагдана (Postgres-д, бүх Worker instance-д нийтлэг).
-
-## Өгөгдлийн сан
-
-| Хүснэгт | Агуулга |
-|---|---|
-| `users` | админ, агент (имэйл, утас, эрх, нууц үгийн хэш) |
-| `sessions` | нэвтрэлтийн токены хэш, дуусах хугацаа |
-| `login_attempts` | буруу нэвтрэх оролдлого (хурдны хязгаар) |
-| `listings` | шүүлтүүрт хэрэгтэй талбарууд багана, бусад нь `data` (jsonb: тайлбар, зураг, 360° аялал…). Нийтэд `L` + `no` |
-| `reports` | зарын мэдээлэл |
-
-Хайлт, шүүлтүүр, эрэмбэ бүгд SQL дээр (`src/search.ts`). Кирилл хайлт `search_text` (JS-ээр жижигрүүлсэн) дээр тул DB-ийн locale-оос үл хамаарна.
-Схем өөрчлөх бол `migrations/0002_….sql` шинэ файл нэмээд `npm run db:migrate`.
-
-## Байршуулах (deploy)
-
-1. R2 bucket: `npx wrangler r2 bucket create ger360-uploads`
-2. Production Neon: `.dev.vars.production` (git-д орохгүй) файлд `DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` (12+ тэмдэгт) бичээд:
-   `npm run db:migrate:prod` — хүснэгт үүсгэж, анхны админыг үүсгэнэ. Production дээр `admin`/`admin` анхдагч админ хэзээ ч үүсэхгүй.
-   (Тест өгөгдлийн сан `.dev.vars`-д — `npm run db:migrate`, `npm run import:local`.)
-3. Worker-т production Neon-ий хаяг: `npx wrangler secret put DATABASE_URL`
-4. `npm run deploy` → олгосон `https://listing-server-api.<account>.workers.dev` хаягийг frontend-ийн Vercel төсөлд `API_URL` болгоно.
-5. Сонголтоор — хурдасгах: Hyperdrive үүсгээд `wrangler.jsonc`-д `HYPERDRIVE` binding нэмнэ (тайлбар файлд бий). Код автоматаар түүнийг ашиглана.
-
-Анхаар:
-- Нууц үгийн хэш (PBKDF2) нэвтрэх бүрд ~CPU зарцуулдаг тул Workers **Paid** план (CPU хязгаар өндөр) зөвлөнө.
-- "Утас харах" хурдны хязгаар isolate бүрийн санах ойд (ойролцоо).
+Шалгах: `curl https://<worker-нэр>.<account>.workers.dev/api/health`

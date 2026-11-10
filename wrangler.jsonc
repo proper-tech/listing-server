@@ -1,17 +1,42 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "listing-server-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
-  // postgres.js (Neon) needs Node.js compatibility (TCP sockets via node:net/tls shims)
-  "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  "upload_source_maps": true,
 
-  // Зураг: R2 bucket (`npx wrangler r2 bucket create ger360-uploads`)
-  "r2_buckets": [{ "binding": "UPLOADS", "bucket_name": "ger360-uploads" }]
+  // ---------- testing (анхдагч): `npm run dev`, `npm run deploy:testing` ----------
+  "name": "listing-server-api-testing",
+  "vars": { "ENVIRONMENT": "testing" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "listing-server-testing",
+      "database_id": "3c3c6051-b29c-4e4b-a14f-627d9fc864f1",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [
+    { "binding": "UPLOADS", "bucket_name": "listing-server-testing" },
+  ],
 
-  // Өгөгдөл: Neon. Хамгийн энгийн нь `npx wrangler secret put DATABASE_URL`.
-  // Production-д холболтыг хурдасгах бол Hyperdrive үүсгээд доорхыг нээнэ (код автоматаар ашиглана):
-  //   npx wrangler hyperdrive create ger360-neon --connection-string="postgresql://...neon.tech/neondb?sslmode=require"
-  // ,"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<hyperdrive-id>", "localConnectionString": "postgresql://postgres:postgres@127.0.0.1:5433/postgres" }]
+  "env": {
+    // ---------- production: `npm run deploy:production` (--env production) ----------
+    // Binding-ууд өвлөгддөггүй тул энд дахин бичнэ.
+    "production": {
+      "name": "listing-server-api",
+      "vars": { "ENVIRONMENT": "production" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "listing-server-production",
+          "database_id": "8758b2f4-0370-4173-9c28-226979ec8c25",
+          "migrations_dir": "migrations",
+        },
+      ],
+      "r2_buckets": [
+        { "binding": "UPLOADS", "bucket_name": "listing-server-production" },
+      ],
+    },
+  },
 }
