@@ -9,20 +9,21 @@
     "dev:remote": "wrangler dev --remote --port 4000",
     "deploy:testing": "wrangler deploy",
     "deploy:production": "wrangler deploy --env production",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p scripts",
     "cf-typegen": "wrangler types",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:testing": "wrangler d1 migrations apply DB --remote",
     "db:migrate:production": "wrangler d1 migrations apply DB --remote --env production",
-    "db:seed:local": "wrangler d1 execute DB --local --file seeds/mock.sql",
-    "db:seed:testing": "wrangler d1 execute DB --remote --file seeds/mock.sql"
+    "agent:create": "node scripts/create-agent.ts"
   },
   "dependencies": {
+    "@phi-ag/argon2": "^0.6.2",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.17"
   },
   "devDependencies": {
+    "@types/node": "^22.20.5",
     "drizzle-kit": "^0.31.11",
     "typescript": "^7.0.2",
     "wrangler": "^4.158.0"

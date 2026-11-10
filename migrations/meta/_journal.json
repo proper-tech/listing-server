@@ -15,6 +15,27 @@
       "when": 1794296072044,
       "tag": "0001_mock_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794299767989,
+      "tag": "0002_agents",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1794300051183,
+      "tag": "0003_drop_mock_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1794301968368,
+      "tag": "0004_auth",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,16 @@
+{
+  // Node дээр ажилладаг скриптүүд (Worker-ийн tsconfig-оос тусдаа, Node-ийн төрлүүдтэй)
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2023", "dom"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true
+  },
+  "include": ["."]
+}

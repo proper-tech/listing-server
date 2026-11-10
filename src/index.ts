@@ -3,10 +3,13 @@
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import { cors } from "hono/cors";
+import { csrf } from "hono/csrf";
+import { HTTPException } from "hono/http-exception";
 import { sql } from "drizzle-orm";
 import { createDb } from "./db/index.ts";
+import { loadAuth } from "./auth.ts";
+import { authRoutes } from "./routes/auth.ts";
 import { testRoutes } from "./routes/test.ts";
-import { mockRoutes } from "./routes/mock.ts";
 import type { AppEnv } from "./types.ts";
 
 const ALLOWED_ORIGINS = [
@@ -27,12 +30,17 @@ app.use(
   }),
 );
 app.use("*", secureHeaders());
+// Cookie-тэй тул: өөр сайтаас form (text/plain, urlencoded, multipart)-оор илгээсэн POST-ыг хаана.
+// JSON хүсэлтийг CORS preflight хамгаална.
+app.use("*", csrf({ origin: ALLOWED_ORIGINS }));
 
 // Drizzle: route бүрт `c.var.db`
 app.use("*", async (c, next) => {
   c.set("db", createDb(c.env.DB));
   await next();
 });
+// JWT cookie → `c.var.agent` (нэвтрээгүй бол null)
+app.use("*", loadAuth);
 
 app.get("/health", async (c) => {
   const [db, storage] = await Promise.all([
@@ -52,12 +60,14 @@ app.get("/health", async (c) => {
   });
 });
 
+app.route("/auth", authRoutes);
 app.route("/test", testRoutes);
-app.route("/mock", mockRoutes);
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 
 app.onError((err, c) => {
+  // Hono-ийн middleware-ийн алдаа (жишээ нь csrf → 403)-г хэвээр нь буцаана
+  if (err instanceof HTTPException) return c.json({ error: err.message || "Хориглосон" }, err.status);
   console.error(err);
   return c.json({ error: "Серверийн алдаа" }, 500);
 });
