@@ -3,3 +3,4 @@
 // Өөрчилсний дараа `npm run db:generate` → migrations/ дотор SQL үүснэ → `npm run db:migrate:local`.
 export * from "./agents.schema.ts";
 export * from "./login-attempts.schema.ts";
+export * from "./posts.schema.ts";

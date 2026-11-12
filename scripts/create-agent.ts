@@ -18,12 +18,17 @@ if (!email?.includes("@") || !name?.trim() || !["admin", "agent"].includes(role)
   process.exit(1);
 }
 
-const password = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) =>
-  "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"[b % 55],
-).join("");
+// Нууц үгийг AGENT_PASSWORD-оор өгч болно; өгөөгүй бол түр нууц үг үүсгэж солиулна.
+const providedPassword = process.env.AGENT_PASSWORD;
+const password =
+  providedPassword ??
+  Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) =>
+    "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"[b % 55],
+  ).join("");
+const mustChange = providedPassword ? 0 : 1;
 const q = (s: string) => `'${s.replaceAll("'", "''")}'`;
 const sql = `INSERT INTO agents (name, email, role, password_hash, must_change_password)
-VALUES (${q(name.trim())}, ${q(email)}, ${q(role)}, ${q(hashWith(await initArgon2(), password))}, 1);`;
+VALUES (${q(name.trim())}, ${q(email)}, ${q(role)}, ${q(hashWith(await initArgon2(), password))}, ${mustChange});`;
 
 execFileSync("npx", ["wrangler", "d1", "execute", "DB", ...wranglerFlags, "--command", sql], {
   stdio: "inherit",

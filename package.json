@@ -5,8 +5,8 @@
   "type": "module",
   "description": "үл хөдлөх хөрөнгийн зарын сайтын API (Cloudflare Workers + Hono, D1, R2)",
   "scripts": {
-    "dev": "wrangler dev --port 4000 --var ENVIRONMENT:local",
-    "dev:remote": "wrangler dev --remote --port 4000",
+    "dev": "wrangler dev --remote --port 4000",
+    "dev:local": "wrangler dev --port 4000 --var ENVIRONMENT:local",
     "deploy:testing": "wrangler deploy",
     "deploy:production": "wrangler deploy --env production",
     "typecheck": "tsc --noEmit && tsc --noEmit -p scripts",

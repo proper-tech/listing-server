@@ -18,6 +18,16 @@ Endpoint-ууд:
   - Cookie `SameSite`: `wrangler.jsonc`-ийн `COOKIE_SAMESITE`. Одоо хоёр орчинд `None` + `Partitioned` (вэб `vercel.app`, API `workers.dev` өөр site). Нэг домэйн авмагц `Lax` болгоно
   - `agent.mustChangePassword` үнэн бол `requireAuth`-тай route-ууд 403 `PASSWORD_CHANGE_REQUIRED` буцаана
   - Хамгаалалт: имэйлээр 15 минутад 5, IP-ээр 20 буруу оролдлого → 429; өөр сайтаас form POST → 403
+- `/api/posts` — зар (listing). Нийтийн GET-ууд нэвтрэлт шаардахгүй; бичих үйлдэл агент шаардана:
+  - `GET  /api/posts` — жагсаалт (зөвхөн `active`; админ бүгдийг, `status`-аар шүүнэ). Query: `page`, `limit` (≤60), `dealType` (`sale|rent`), `category` (`apartment|house|land|office|shop|warehouse|garage|summer_house`), `district`, `rooms` (`1,2,5` — 5 = 5+), `minPrice/maxPrice`, `minPpm/maxPpm` (м² үнэ), `minArea/maxArea`, `minFloor/maxFloor`, `minTotalFloors/maxTotalFloors`, `minYear/maxYear`, `notFirst=1`, `notLast=1`, `leasing=1`, `garage=1`, `hasTour=1`, `postedDays`, `sellerType` (`owner|agent`), `placement` (`vip|top`), `q` (гарчиг, тайлбар, дүүрэг, хаяг), `sort` (`newest|price_asc|price_desc|area_desc|ppm_asc`), `plain=1` (vip/top-ыг эхэнд гаргахгүй), `mine=1` (нэвтэрсэн — өөрийн бүх зар). → `{ posts, total, page, limit, pages }`. Зар бүр `agent` (id, name, phone, avatarKey) ба `images` ([{ key, url, width, height, sortOrder }])-тэй
+  - `GET  /api/posts/stats` — идэвхтэй зарын тоо `{ counts: { "sale:apartment": n, … }, total }`
+  - `GET  /api/posts/:id` — дэлгэрэнгүй (`active`; бусад төлөв зөвхөн эзэн/админд). Үзсэн тоо (`views`) нэмэгдэнэ (`?view=0` бол үгүй)
+  - `POST /api/posts` (нэвтэрсэн) — үүсгэх. Агентын зар `pending` (админ батална), админых `active`; `status: "draft"` бол ноорог. Шаардлагатай: `title, dealType, category, district, price, area`. Сонголт: `description, khoroo, address, lat, lng, rooms, floor, totalFloors, yearInUse, floorMaterial, balconies, windowType, windowCount, doorType, garage, leasing, paymentTerms ([текст]), sellerName, sellerType (owner|agent|company), contactPhone, placement (free|vip|top — 7 хоног, одоохондоо төлбөргүй), tour (360° аялал, панорам нь /api/uploads/listings/…), images ([R2 түлхүүр эсвэл { key, width, height }])`
+  - `PATCH /api/posts/:id` (эзэн эсвэл админ) — хэсэгчилсэн засвар (ижил талбарууд; `images` өгвөл бүрэн солино). Агент төлөвийг зөвхөн `draft|pending|sold|archived` болгоно; `active|rejected` — зөвхөн админ
+  - `DELETE /api/posts/:id` (эзэн эсвэл админ) — устгах (зураг cascade)
+- `/api/uploads` — зураг (R2):
+  - `POST /api/uploads` (нэвтэрсэн) — `multipart/form-data`, талбар `file` (JPEG/PNG/WebP/AVIF, ≤15MB — 360° панорам багтана) → `{ key, url }`. Дараа нь `key`-г зарын `images`-д дамжуулна
+  - `GET  /api/uploads/:key` — зургийг нийтэд дамжуулна (нэг жил cache)
 
 Агент / админ үүсгэх (нийтийн бүртгэлгүй; түр нууц үг хэвлэнэ, анх нэвтрэхэд солиулна):
 
