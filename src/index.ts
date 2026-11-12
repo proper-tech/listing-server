@@ -9,6 +9,7 @@ import { sql } from "drizzle-orm";
 import { createDb } from "./db/index.ts";
 import { loadAuth } from "./auth.ts";
 import { authRoutes } from "./routes/auth.ts";
+import { inquiryRoutes } from "./routes/inquiries.ts";
 import { postRoutes } from "./routes/posts.ts";
 import { uploadsRoutes } from "./routes/uploads.ts";
 import type { AppEnv } from "./types.ts";
@@ -65,6 +66,8 @@ app.get("/health", async (c) => {
 app.route("/auth", authRoutes);
 app.route("/posts", postRoutes);
 app.route("/uploads", uploadsRoutes);
+// /posts/:id/inquiries ба /inquiries — routes/inquiries.ts
+app.route("/", inquiryRoutes);
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 
