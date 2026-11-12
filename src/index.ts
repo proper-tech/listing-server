@@ -16,6 +16,7 @@ import type { AppEnv } from "./types.ts";
 const ALLOWED_ORIGINS = [
   "http://localhost:3000",
   "https://listing-web-five.vercel.app",
+  "https://listing-web-testing.vercel.app",
 ];
 
 const app = new Hono<AppEnv>().basePath("/api");
