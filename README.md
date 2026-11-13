@@ -12,6 +12,7 @@ Endpoint-ууд:
   - `POST /api/auth/login` `{ email, password }` → JWT cookie тавина, `{ agent }`
   - `POST /api/auth/logout`
   - `GET /api/auth/me` → `{ agent }` | 401
+  - `PATCH /api/auth/me` `{ name?, phone?, company?, bio?, avatarKey? }` → `{ agent }` — профайл засах (/account). Хэсэгчилсэн; нэр 1–60, утас ≤30 (тоо, `+ - ( )`), компани ≤80, танилцуулга ≤400. `avatarKey`: эхлээд `POST /api/uploads` → `key` (`listings/…`, R2-д байх ёстой), `null` бол арилгана. Имэйл, эрхийг зөвхөн админ солино
   - `POST /api/auth/change-password` `{ currentPassword, newPassword }` — шинэ JWT; бусад төхөөрөмжийн токенууд хүчингүй (`agents.token_version` +1)
   - JWT: HS256, 30 хоног, `{ sub, role, ver, iat, exp }`. Хүсэлт бүрт агентыг id-аар шалгана (идэвхгүй эсвэл `ver` зөрвөл хүчингүй)
   - Нууц үг: Argon2id (WASM, `@phi-ag/argon2`)

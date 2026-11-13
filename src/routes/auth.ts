@@ -2,13 +2,15 @@
 //   POST /api/auth/login            { email, password } → JWT cookie тавина, { agent }
 //   POST /api/auth/logout           cookie арилгана
 //   GET  /api/auth/me               { agent } | 401
+//   PATCH /api/auth/me              { name?, phone?, company?, bio?, avatarKey? } → { agent } (профайл засах)
 //   POST /api/auth/change-password  { currentPassword, newPassword } → шинэ JWT, { agent }
 //                                   бусад төхөөрөмж дээрх токенууд хүчингүй болно
 import { Hono, type Context } from "hono";
 import { and, count, eq, gt, inArray, lt, sql } from "drizzle-orm";
 import { agents, loginAttempts } from "../db/schema.ts";
 import { getDummyHash, hashPassword, verifyPassword } from "../crypto.ts";
-import { clearToken, issueToken, toPublicAgent } from "../auth.ts";
+import { clearToken, issueToken, requireAuth, toPublicAgent } from "../auth.ts";
+import { IMAGE_KEY_PREFIX } from "./uploads.ts";
 import type { AppEnv } from "../types.ts";
 
 export const authRoutes = new Hono<AppEnv>();
@@ -75,6 +77,52 @@ authRoutes.get("/me", (c) => {
   const agent = c.var.agent;
   if (!agent) return c.json({ error: "Нэвтрээгүй байна" }, 401);
   return c.json({ agent }, 200, { "cache-control": "no-store" });
+});
+
+// Профайл засах (/account). Хэсэгчилсэн: өгсөн талбаруудыг л шинэчилнэ.
+// Имэйл, эрх, идэвх — зөвхөн админ (энд солихгүй).
+const PROFILE_TEXT = [
+  ["name", 1, 60, "Нэр"],
+  ["phone", 0, 30, "Утас"],
+  ["company", 0, 80, "Компани"],
+  ["bio", 0, 400, "Танилцуулга"],
+] as const;
+
+authRoutes.patch("/me", requireAuth, async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object" || Array.isArray(body))
+    return c.json({ error: "JSON объект илгээнэ үү" }, 400);
+
+  const v: Partial<Pick<typeof agents.$inferInsert, "name" | "phone" | "company" | "bio" | "avatarKey">> = {};
+  for (const [k, min, max, label] of PROFILE_TEXT) {
+    if (!(k in body)) continue;
+    if (typeof body[k] !== "string") return c.json({ error: `${label}: текст байна` }, 400);
+    const s = body[k].trim();
+    if (s.length < min || s.length > max)
+      return c.json({ error: min ? `${label} ${min}–${max} тэмдэгт` : `${label} ${max} тэмдэгтээс хэтрэхгүй` }, 400);
+    v[k] = s;
+  }
+  if (v.phone && !/^[0-9+\-\s()]+$/.test(v.phone))
+    return c.json({ error: "Утас зөвхөн тоо, +, -, хаалт агуулна" }, 400);
+
+  // Зураг: эхлээд POST /api/uploads → key; null бол арилгана
+  if ("avatarKey" in body) {
+    const key = body.avatarKey;
+    if (key === null) v.avatarKey = null;
+    else if (typeof key !== "string" || !key.startsWith(IMAGE_KEY_PREFIX) || key.length > 200)
+      return c.json({ error: "Зургийн түлхүүр буруу (эхлээд /api/uploads-руу байршуулна)" }, 400);
+    else if (!(await c.env.UPLOADS.head(key))) return c.json({ error: "Зураг олдсонгүй" }, 400);
+    else v.avatarKey = key;
+  }
+  if (!Object.keys(v).length) return c.json({ error: "Өөрчлөх талбар алга" }, 400);
+
+  const [updated] = await c.var.db
+    .update(agents)
+    .set(v)
+    .where(eq(agents.id, c.var.agent!.id))
+    .returning();
+  if (!updated) return c.json({ error: "Олдсонгүй" }, 404);
+  return c.json({ agent: toPublicAgent(updated) }, 200, { "cache-control": "no-store" });
 });
 
 // Түр нууц үгтэй (mustChangePassword) агент ч ашиглана — тиймээс requireAuth биш.

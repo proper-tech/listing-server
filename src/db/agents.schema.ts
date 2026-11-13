@@ -16,6 +16,9 @@ export const agents = sqliteTable("agents", {
   // JWT-ийн `ver`-тэй тулгана — нэмэгдүүлбэл өмнө олгосон бүх токен хүчингүй (нууц үг солих г.м.)
   tokenVersion: integer("token_version").notNull().default(0),
   avatarKey: text("avatar_key"), // UPLOADS bucket доторх зургийн түлхүүр
+  // Профайл (/account): агент өөрөө засна
+  company: text("company").notNull().default(""), // компани / агентлаг (≤80)
+  bio: text("bio").notNull().default(""), // танилцуулга (≤400)
   lastLoginAt: integer("last_login_at", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
