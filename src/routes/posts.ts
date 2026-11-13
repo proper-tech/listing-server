@@ -34,7 +34,7 @@ import type { AppEnv } from "../types.ts";
 export const postRoutes = new Hono<AppEnv>();
 
 const LIMIT_DEFAULT = 20;
-const LIMIT_MAX = 60; // вэбийн газрын зургийн харагдац нэг дор 60 зар авна
+const LIMIT_MAX = 60; // нэг хуудсанд; газрын зураг GET /pins-ээр (хөнгөн, 1000 хүртэл) авна
 const MAX_IMAGES = 24;
 const PROMO_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -269,19 +269,15 @@ const syncImages = (db: Db, postId: number, imgs: ImageIn[]) => [
 const promoRank = sql<number>`(case when ${posts.placementUntil} > unixepoch() then (case ${posts.placement} when 'top' then 2 when 'vip' then 1 else 0 end) else 0 end)`;
 const pricePerM2 = sql`(${posts.price} / ${posts.area})`;
 
-// ---- GET /api/posts (нийтийн жагсаалт) ----
-postRoutes.get("/", async (c) => {
-  const q = c.req.query();
-  const page = Math.max(1, Math.floor(Number(q.page)) || 1);
-  const limit = Math.min(LIMIT_MAX, Math.max(1, Math.floor(Number(q.limit)) || LIMIT_DEFAULT));
-  const offset = (page - 1) * limit;
-  const agent = c.var.agent;
+// Жагсаалт (GET /) болон газрын зургийн тэмдэг (GET /pins)-ийн нийтлэг шүүлтүүр.
+// `mine=1` нэвтрээгүй бол null (→ 401). deal-ийг тусад нь буцаана (`facets=deal`-д).
+function buildFilter(q: Record<string, string>, agent: PublicAgent | null): { conds: (SQL | undefined)[]; dealCond: SQL | undefined } | null {
   const numQ = (k: string) => (q[k] !== undefined && q[k] !== "" && Number.isFinite(Number(q[k])) ? Number(q[k]) : null);
 
   const conds: (SQL | undefined)[] = [];
   if (q.mine === "1") {
     // өөрийн зар — бүх төлөв
-    if (!agent) return c.json({ error: "Нэвтрээгүй байна" }, 401);
+    if (!agent) return null;
     conds.push(eq(posts.agentId, agent.id));
   } else if (agent?.role === "admin") {
     // Админ `?status=`-аар шүүнэ, өгөхгүй бол бүгдийг хардаг.
@@ -289,7 +285,9 @@ postRoutes.get("/", async (c) => {
   } else {
     conds.push(eq(posts.status, "active"));
   }
-  if (q.dealType && DEAL_TYPES.includes(q.dealType as never)) conds.push(eq(posts.dealType, q.dealType as Post["dealType"]));
+  // deal-ийг тусад нь: `facets=deal` үед бусад шүүлтүүрээр deal бүрийн тоог гаргана
+  const dealCond =
+    q.dealType && DEAL_TYPES.includes(q.dealType as never) ? eq(posts.dealType, q.dealType as Post["dealType"]) : undefined;
   if (q.category && CATEGORIES.includes(q.category as never)) conds.push(eq(posts.category, q.category as Post["category"]));
   if (q.district) conds.push(eq(posts.district, q.district));
   if (q.placement && PLACEMENTS.includes(q.placement as never))
@@ -327,7 +325,20 @@ postRoutes.get("/", async (c) => {
     const pat = `%${w}%`;
     conds.push(or(like(posts.title, pat), like(posts.description, pat), like(posts.district, pat), like(posts.address, pat)));
   }
-  const where = conds.length ? and(...conds) : undefined;
+  return { conds, dealCond };
+}
+
+// ---- GET /api/posts (нийтийн жагсаалт) ----
+postRoutes.get("/", async (c) => {
+  const q = c.req.query();
+  const page = Math.max(1, Math.floor(Number(q.page)) || 1);
+  const limit = Math.min(LIMIT_MAX, Math.max(1, Math.floor(Number(q.limit)) || LIMIT_DEFAULT));
+  const offset = (page - 1) * limit;
+  const agent = c.var.agent;
+  const filter = buildFilter(q, agent);
+  if (!filter) return c.json({ error: "Нэвтрээгүй байна" }, 401);
+  const { conds, dealCond } = filter;
+  const where = and(...conds, dealCond);
 
   // sort: newest (default) | price_asc | price_desc | area_desc | ppm_asc. vip/top эхэнд (`plain=1` бол үгүй)
   const sorts: Record<string, SQL[]> = {
@@ -343,7 +354,7 @@ postRoutes.get("/", async (c) => {
     desc(posts.id),
   ];
 
-  const [rows, [{ total }]] = await Promise.all([
+  const [rows, [{ total }], dealCounts] = await Promise.all([
     c.var.db
       .select({ ...postColumns, agent: agentSel })
       .from(posts)
@@ -353,6 +364,7 @@ postRoutes.get("/", async (c) => {
       .limit(limit)
       .offset(offset),
     c.var.db.select({ total: count() }).from(posts).where(where),
+    q.facets === "deal" ? dealCountsFor(c.var.db, conds) : null,
   ]);
 
   return c.json({
@@ -361,6 +373,8 @@ postRoutes.get("/", async (c) => {
     page,
     limit,
     pages: Math.ceil(total / limit) || 1,
+    // `facets=deal`: { sale, rent } — хайлтын табуудын тоо (нэг хүсэлтээр)
+    ...(dealCounts && { dealCounts }),
   });
 });
 
@@ -381,6 +395,40 @@ postRoutes.get("/stats", async (c) => {
 });
 
 // ---- GET /api/posts/:id (дэлгэрэнгүй) ----
+// `facets=deal`: deal-ийн шүүлтүүргүйгээр, бусад шүүлтүүрээр deal бүрийн тоо → { sale, rent }
+const dealCountsFor = async (db: Db, conds: (SQL | undefined)[]) => {
+  const rows = await db.select({ dealType: posts.dealType, n: count() }).from(posts).where(and(...conds)).groupBy(posts.dealType);
+  return Object.fromEntries(DEAL_TYPES.map((d) => [d, rows.find((r) => r.dealType === d)?.n ?? 0])) as Record<(typeof DEAL_TYPES)[number], number>;
+};
+
+// ---- GET /api/posts/pins (газрын зургийн тэмдэг) ----
+// Жагсаалттай ижил шүүлтүүр, гэхдээ зар бүрийн зөвхөн тэмдэг, popup-д хэрэгтэй талбарууд (зураг 1, агентгүй)
+// тул нэг хүсэлтээр PINS_MAX хүртэл зар. → { pins, total, truncated, dealCounts? }; truncated = нийт нь PINS_MAX-аас их.
+const PINS_MAX = 1000;
+postRoutes.get("/pins", async (c) => {
+  const q = c.req.query();
+  const filter = buildFilter(q, c.var.agent);
+  if (!filter) return c.json({ error: "Нэвтрээгүй байна" }, 401);
+  const where = and(...filter.conds, filter.dealCond);
+  const cover = sql<string | null>`(select ${postImages.key} from ${postImages} where ${postImages.postId} = ${posts.id} order by ${postImages.sortOrder}, ${postImages.id} limit 1)`;
+  const [rows, [{ total }], dealCounts] = await Promise.all([
+    c.var.db
+      .select({
+        id: posts.id, title: posts.title, price: posts.price, dealType: posts.dealType, category: posts.category,
+        district: posts.district, lat: posts.lat, lng: posts.lng, rooms: posts.rooms, area: posts.area,
+        promo: promoRank, coverKey: cover,
+      })
+      .from(posts)
+      .where(where)
+      .orderBy(desc(promoRank), desc(posts.createdAt), desc(posts.id))
+      .limit(PINS_MAX),
+    c.var.db.select({ total: count() }).from(posts).where(where),
+    q.facets === "deal" ? dealCountsFor(c.var.db, filter.conds) : null,
+  ]);
+  const pins = rows.map(({ coverKey, ...p }) => ({ ...p, cover: coverKey ? `/api/uploads/${coverKey}` : null }));
+  return c.json({ pins, total, truncated: total > rows.length, ...(dealCounts && { dealCounts }) });
+});
+
 postRoutes.get("/:id{[0-9]+}", async (c) => {
   const id = Number(c.req.param("id"));
   const [row] = await c.var.db

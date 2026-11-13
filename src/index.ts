@@ -11,6 +11,8 @@ import { loadAuth } from "./auth.ts";
 import { authRoutes } from "./routes/auth.ts";
 import { inquiryRoutes } from "./routes/inquiries.ts";
 import { postRoutes } from "./routes/posts.ts";
+import { agentRoutes } from "./routes/agents.ts";
+import { reportRoutes } from "./routes/reports.ts";
 import { uploadsRoutes } from "./routes/uploads.ts";
 import type { AppEnv } from "./types.ts";
 
@@ -73,6 +75,9 @@ app.get("/health", async (c) => {
 app.route("/auth", authRoutes);
 app.route("/posts", postRoutes);
 app.route("/uploads", uploadsRoutes);
+app.route("/agents", agentRoutes);
+// /posts/:id/reports ба /reports — routes/reports.ts
+app.route("/", reportRoutes);
 // /posts/:id/inquiries ба /inquiries — routes/inquiries.ts
 app.route("/", inquiryRoutes);
 
