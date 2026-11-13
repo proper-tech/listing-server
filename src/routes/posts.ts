@@ -98,7 +98,10 @@ function parseTour(t: unknown): Tour | null | { error: string } {
       ? (r.source as Tour["rooms"][number]["source"])
       : "upload360";
     const hotspots = Array.isArray(r.hotspots) ? r.hotspots.slice(0, 20) : [];
+    // partial panorama: both angles or neither (absent = full sphere)
+    const partial = isNum(r.haov) && isNum(r.vaov) && r.haov >= 30 && r.haov <= 360 && r.vaov >= 10 && r.vaov < 180;
     rooms.push({
+      ...(partial ? { haov: r.haov as number, vaov: r.vaov as number } : {}),
       id, name, source, status: "ready",
       panorama: { src, width: isInt(r.panorama.width) ? r.panorama.width : 0, height: isInt(r.panorama.height) ? r.panorama.height : 0 },
       startYaw: isNum(r.startYaw) ? Math.max(-360, Math.min(360, r.startYaw)) : 0,
@@ -427,24 +430,34 @@ postRoutes.post("/", requireAuth, async (c) => {
 });
 
 // ---- PATCH /api/posts/:id (засах) ----
+// Агуулгыг (гарчиг, үнэ, зураг, 360°, байршил…) зөвхөн админ засна.
+// Эзэмшигч агент зөвхөн төлөвөө солино (зарагдсан, архив, дахин хянуулах): body нь зөвхөн { status }.
 postRoutes.patch("/:id{[0-9]+}", requireAuth, async (c) => {
   const id = Number(c.req.param("id"));
   const [existing] = await c.var.db
-    .select({ agentId: posts.agentId })
+    .select({ agentId: posts.agentId, placement: posts.placement })
     .from(posts)
     .where(eq(posts.id, id))
     .limit(1);
   if (!existing) return c.json({ error: "Зар олдсонгүй" }, 404);
   const agent = c.var.agent!;
-  if (agent.role !== "admin" && existing.agentId !== agent.id)
+  const isAdmin = agent.role === "admin";
+  if (!isAdmin && existing.agentId !== agent.id)
     return c.json({ error: "Энэ зарыг засах эрхгүй" }, 403);
 
   const body = await c.req.json().catch(() => null);
   if (!isObj(body)) return c.json({ error: "JSON body оруулна уу" }, 400);
+  if (!isAdmin && Object.keys(body).some((k) => k !== "status"))
+    return c.json({ error: "Зарын мэдээллийг зөвхөн админ засах боломжтой" }, 403);
   const parsed = parseBody(body, true);
   if ("error" in parsed) return c.json({ error: parsed.error }, 400);
   if (!statusAllowed(agent, parsed.values.status))
     return c.json({ error: "Зарыг зөвхөн админ батлах/татгалзах боломжтой" }, 403);
+  // same placement again (e.g. an admin edit re-sending the form) must not restart the paid VIP/Top period
+  if (parsed.values.placement === existing.placement) {
+    delete parsed.values.placement;
+    delete parsed.values.placementUntil;
+  }
 
   if (Object.keys(parsed.values).length)
     await c.var.db.update(posts).set(parsed.values).where(eq(posts.id, id));

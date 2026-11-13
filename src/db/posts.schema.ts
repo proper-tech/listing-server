@@ -39,6 +39,9 @@ export type TourRoom = {
   status: "ready";
   startYaw: number;
   hotspots: TourHotspot[];
+  // хэсэгчилсэн панорама (утасны Pano): хэвтээ/босоо хамрах өнцөг, градусаар. Байхгүй бол бүтэн 360° бөмбөрцөг
+  haov?: number;
+  vaov?: number;
 };
 export type Tour = { startRoomId: string | null; rooms: TourRoom[] };
 

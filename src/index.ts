@@ -32,7 +32,14 @@ app.use(
     maxAge: 86400,
   }),
 );
-app.use("*", secureHeaders());
+// Зургийг (GET /api/uploads/…) вэб өөр origin-оос <img>-ээр ачаалдаг тул CORP-ийг cross-origin болгоно.
+const apiSecureHeaders = secureHeaders();
+const imageSecureHeaders = secureHeaders({ crossOriginResourcePolicy: "cross-origin" });
+app.use("*", (c, next) =>
+  c.req.method === "GET" && c.req.path.startsWith("/api/uploads/")
+    ? imageSecureHeaders(c, next)
+    : apiSecureHeaders(c, next),
+);
 // Cookie-тэй тул: өөр сайтаас form (text/plain, urlencoded, multipart)-оор илгээсэн POST-ыг хаана.
 // JSON хүсэлтийг CORS preflight хамгаална.
 app.use("*", csrf({ origin: ALLOWED_ORIGINS }));
