@@ -17,10 +17,11 @@ export const CATEGORIES = [
   "garage", // гараж, зогсоол
   "summer_house", // зуслан
 ] as const;
+// unpaid = агентын зар, төлбөр хүлээгдэж буй (нийтэд болон админы хяналтад харагдахгүй);
 // pending = админ хянаж байна, rejected = админ татгалзсан
-export const POST_STATUSES = ["draft", "pending", "active", "rejected", "sold", "archived"] as const;
+export const POST_STATUSES = ["draft", "unpaid", "pending", "active", "rejected", "sold", "archived"] as const;
 export const SELLER_TYPES = ["owner", "agent", "company"] as const;
-// Зарын байршуулалт: free = энгийн, vip / top = 7 хоног жагсаалтын эхэнд (одоохондоо төлбөргүй, демо)
+// Зарын байршуулалт: free = энгийн, vip / top = 7 хоног жагсаалтын эхэнд. Үнэ: src/pricing.ts
 export const PLACEMENTS = ["free", "vip", "top"] as const;
 
 export type DealType = (typeof DEAL_TYPES)[number];
@@ -79,7 +80,9 @@ export const posts = sqliteTable(
     sellerType: text("seller_type", { enum: SELLER_TYPES }).notNull().default("agent"),
     contactPhone: text("contact_phone").notNull().default(""),
     placement: text("placement", { enum: PLACEMENTS }).notNull().default("free"),
-    placementUntil: integer("placement_until", { mode: "timestamp" }), // vip/top дуусах хугацаа
+    placementUntil: integer("placement_until", { mode: "timestamp" }), // vip/top дуусах хугацаа (админ баталмагц эхэлнэ)
+    // төлөгдсөн хугацаа: агентын зар QPay-ээр төлөхөд, админы зар үүсгэхэд (төлбөргүй). null = төлөөгүй
+    paidAt: integer("paid_at", { mode: "timestamp" }),
     status: text("status", { enum: POST_STATUSES }).notNull().default("active"),
     views: integer("views").notNull().default(0),
     createdAt: integer("created_at", { mode: "timestamp" })

@@ -9,7 +9,15 @@
   "name": "listing-server-api-testing",
   // COOKIE_SAMESITE: вэб (vercel.app), API (workers.dev) өөр site тул "None".
   // Хоёуланг нэг домэйнд (жишээ нь example.mn + api.example.mn) оруулмагц "Lax" болгоно.
-  "vars": { "ENVIRONMENT": "testing", "COOKIE_SAMESITE": "None" },
+  // QPay: QPAY_MODE mock | sandbox | live (src/qpay.ts). Нууц утгууд: `wrangler secret put QPAY_USERNAME` гэх мэт.
+  // testing: mock — QPay-гүйгээр бүх урсгалыг туршина ("Туршилтын төлбөр" товч). Sandbox түлхүүр авмагц "sandbox" болгоно.
+  "vars": {
+    "ENVIRONMENT": "testing",
+    "COOKIE_SAMESITE": "None",
+    "QPAY_MODE": "mock",
+    "QPAY_INVOICE_CODE": "",
+    "PUBLIC_API_URL": "https://listing-server-api-testing.badralbaigalmaa7.workers.dev",
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -28,7 +36,15 @@
     "production": {
       "name": "listing-server-api",
       // TODO: нэг домэйн авмагц "Lax" болгох
-      "vars": { "ENVIRONMENT": "production", "COOKIE_SAMESITE": "None" },
+      // live: жинхэнэ мөнгө. QPAY_INVOICE_CODE болон secret-үүдийг (QPAY_USERNAME, QPAY_PASSWORD, QPAY_CALLBACK_SECRET)
+      // тавихаас өмнө агентууд зар төлж чадахгүй (503).
+      "vars": {
+        "ENVIRONMENT": "production",
+        "COOKIE_SAMESITE": "None",
+        "QPAY_MODE": "live",
+        "QPAY_INVOICE_CODE": "",
+        "PUBLIC_API_URL": "https://listing-server-api.badralbaigalmaa7.workers.dev",
+      },
       "d1_databases": [
         {
           "binding": "DB",

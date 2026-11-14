@@ -410,7 +410,12 @@ postRoutes.get("/pins", async (c) => {
   const filter = buildFilter(q, c.var.agent);
   if (!filter) return c.json({ error: "Нэвтрээгүй байна" }, 401);
   const where = and(...filter.conds, filter.dealCond);
-  const cover = sql<string | null>`(select ${postImages.key} from ${postImages} where ${postImages.postId} = ${posts.id} order by ${postImages.sortOrder}, ${postImages.id} limit 1)`;
+  // table-qualified on purpose: drizzle writes bare column names here, and a bare "id" inside the subquery would
+  // mean the photo's id, not the listing's (the cover then matched only by coincidence)
+  // cover = first photo, else the first 360° room's panorama (same as the listing cards' coverImage)
+  const cover = sql<string | null>`coalesce(
+    '/api/uploads/' || (select "pi"."key" from "post_images" as "pi" where "pi"."post_id" = "posts"."id" order by "pi"."sort_order", "pi"."id" limit 1),
+    json_extract("posts"."tour", '$.rooms[0].panorama.src'))`;
   const [rows, [{ total }], dealCounts] = await Promise.all([
     c.var.db
       .select({
@@ -425,7 +430,7 @@ postRoutes.get("/pins", async (c) => {
     c.var.db.select({ total: count() }).from(posts).where(where),
     q.facets === "deal" ? dealCountsFor(c.var.db, filter.conds) : null,
   ]);
-  const pins = rows.map(({ coverKey, ...p }) => ({ ...p, cover: coverKey ? `/api/uploads/${coverKey}` : null }));
+  const pins = rows.map(({ coverKey, ...p }) => ({ ...p, cover: coverKey || null }));
   return c.json({ pins, total, truncated: total > rows.length, ...(dealCounts && { dealCounts }) });
 });
 
@@ -463,13 +468,18 @@ postRoutes.post("/", requireAuth, async (c) => {
   const parsed = parseBody(body, false);
   if ("error" in parsed) return c.json({ error: parsed.error }, 400);
 
-  // Төлөв: ноорог хүсвэл ноорог; бусад нь агентынх админ хянана, админых шууд нийтлэгдэнэ
+  // Төлөв: ноорог хүсвэл ноорог; админых шууд нийтлэгдэнэ (төлбөргүй);
+  // агентынх эхлээд төлбөр хүлээнэ (unpaid) → QPay-ээр төлөхөд админы хяналт (pending) руу (routes/payments.ts)
   const agent = c.var.agent!;
-  const status: PostStatus = parsed.values.status === "draft" ? "draft" : agent.role === "admin" ? "active" : "pending";
+  const isAdmin = agent.role === "admin";
+  const status: PostStatus = parsed.values.status === "draft" ? "draft" : isAdmin ? "active" : "unpaid";
+  const values = { ...parsed.values, status, agentId: agent.id, paidAt: isAdmin ? new Date() : null };
+  // VIP/Онцгой-ийн 7 хоног зар нийтлэгдэх үед эхэлнэ (агентынх — админ баталмагц)
+  if (status !== "active") values.placementUntil = null;
 
   const [created] = await c.var.db
     .insert(posts)
-    .values({ ...parsed.values, status, agentId: agent.id } as typeof posts.$inferInsert)
+    .values(values as typeof posts.$inferInsert)
     .returning({ id: posts.id });
 
   if (parsed.images?.length) await c.var.db.batch(syncImages(c.var.db, created!.id, parsed.images) as never);
@@ -483,7 +493,7 @@ postRoutes.post("/", requireAuth, async (c) => {
 postRoutes.patch("/:id{[0-9]+}", requireAuth, async (c) => {
   const id = Number(c.req.param("id"));
   const [existing] = await c.var.db
-    .select({ agentId: posts.agentId, placement: posts.placement })
+    .select({ agentId: posts.agentId, placement: posts.placement, placementUntil: posts.placementUntil, status: posts.status, paidAt: posts.paidAt })
     .from(posts)
     .where(eq(posts.id, id))
     .limit(1);
@@ -501,11 +511,21 @@ postRoutes.patch("/:id{[0-9]+}", requireAuth, async (c) => {
   if ("error" in parsed) return c.json({ error: parsed.error }, 400);
   if (!statusAllowed(agent, parsed.values.status))
     return c.json({ error: "Зарыг зөвхөн админ батлах/татгалзах боломжтой" }, 403);
+  // хянуулахаар (дахин) илгээх нь төлбөр шаардана — татгалзсан/архивласан зарыг дахин төлөхгүй (paid_at хэвээр)
+  if (!isAdmin && parsed.values.status === "pending" && !existing.paidAt)
+    return c.json({ error: "Зарыг хянуулахын өмнө төлбөрөө төлнө үү", code: "PAYMENT_REQUIRED" }, 402);
   // same placement again (e.g. an admin edit re-sending the form) must not restart the paid VIP/Top period
   if (parsed.values.placement === existing.placement) {
     delete parsed.values.placement;
     delete parsed.values.placementUntil;
   }
+  // VIP/Онцгой-ийн 7 хоног зөвхөн нийтлэгдсэн үед гүйнэ: нийтлэгдээгүй зарт хугацаа тавихгүй,
+  // анх нийтлэгдэх (админ батлах) үед эхлүүлнэ
+  const nextStatus = parsed.values.status ?? existing.status;
+  const nextPlacement = parsed.values.placement ?? existing.placement;
+  if (nextStatus !== "active" && "placementUntil" in parsed.values) parsed.values.placementUntil = null;
+  if (nextStatus === "active" && nextPlacement !== "free" && !existing.placementUntil && !parsed.values.placementUntil)
+    parsed.values.placementUntil = new Date(Date.now() + PROMO_DAYS * DAY_MS);
 
   if (Object.keys(parsed.values).length)
     await c.var.db.update(posts).set(parsed.values).where(eq(posts.id, id));

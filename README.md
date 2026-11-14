@@ -35,6 +35,13 @@ Endpoint-ууд:
   - `GET /api/agents` → `{ agents: [{ …agent, listings }] }`
   - `POST /api/agents` `{ name, email, phone?, password }` — түр нууц үгтэй (анх нэвтрэхэд солиулна). Имэйл давхардвал 409
   - `PATCH /api/agents/:id` `{ name?, email?, phone?, active?, password?, role? }` — `password` (түр) эсвэл `active: false` бол бүх төхөөрөмжөөс гаргана. Админ өөрийгөө идэвхгүй болгох, эрхээ бууруулах боломжгүй
+- Төлбөр (QPay) — агент зар бүрт **10,000₮** (30 хоног) + сонгосон бол VIP **20,000₮** / Онцгой **40,000₮** (7 хоног, админ баталмагц эхэлнэ). Админы зар төлбөргүй. Үнэ: `src/pricing.ts`. Урсгал: агентын шинэ зар `unpaid` → төлөгдмөгц `paid_at` тавигдаж `pending` (админ хянана). Татгалзсан/архивласан зарыг дахин хянуулахад дахин төлөхгүй; төлөөгүй зарыг `pending` болгох оролдлого → 402 `PAYMENT_REQUIRED`
+  - `POST /api/posts/:id/payment` (зарын эзэн агент) — QPay нэхэмжлэх үүсгэх/дахин ашиглах → `{ payment: { id, amount, items, status, qrImage, qrText, shortUrl, links } }` эсвэл `{ paid: true }`
+  - `GET /api/payments/:id` (эзэн, админ) — төлөв; `pending` бол QPay-ээс шалгана
+  - `GET|POST /api/payments/qpay/callback/:secret/:id` — QPay дуудна; нууц үг + QPay-ээс дахин шалгана
+  - `POST /api/payments/:id/mock-pay` — зөвхөн `QPAY_MODE=mock` (туршилт)
+  - `GET /api/payments` (админ) — сүүлийн төлбөрүүд, орлого (`mock` тооцохгүй)
+  - Тохиргоо: `QPAY_MODE` (`mock` | `sandbox` | `live`), `QPAY_INVOICE_CODE`, `PUBLIC_API_URL` (wrangler.jsonc vars); secret: `QPAY_USERNAME`, `QPAY_PASSWORD`, `QPAY_CALLBACK_SECRET`. testing = `mock`, production = `live` (secret-гүй бол агент төлж чадахгүй — 503)
 - `/api/uploads` — зураг (R2):
   - `POST /api/uploads` (нэвтэрсэн) — `multipart/form-data`, талбар `file` (JPEG/PNG/WebP/AVIF, ≤15MB — 360° панорам багтана) → `{ key, url }`. Дараа нь `key`-г зарын `images`-д дамжуулна
   - `GET  /api/uploads/:key` — зургийг нийтэд дамжуулна (нэг жил cache)

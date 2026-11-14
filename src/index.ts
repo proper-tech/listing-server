@@ -12,6 +12,7 @@ import { authRoutes } from "./routes/auth.ts";
 import { inquiryRoutes } from "./routes/inquiries.ts";
 import { postRoutes } from "./routes/posts.ts";
 import { agentRoutes } from "./routes/agents.ts";
+import { paymentRoutes } from "./routes/payments.ts";
 import { reportRoutes } from "./routes/reports.ts";
 import { uploadsRoutes } from "./routes/uploads.ts";
 import type { AppEnv } from "./types.ts";
@@ -44,7 +45,9 @@ app.use("*", (c, next) =>
 );
 // Cookie-тэй тул: өөр сайтаас form (text/plain, urlencoded, multipart)-оор илгээсэн POST-ыг хаана.
 // JSON хүсэлтийг CORS preflight хамгаална.
-app.use("*", csrf({ origin: ALLOWED_ORIGINS }));
+// QPay-ийн callback сервер-сервер хүсэлт (Origin толгойгүй) — өөрийн нууц үг + QPay-ээс дахин шалгалттай.
+const csrfCheck = csrf({ origin: ALLOWED_ORIGINS });
+app.use("*", (c, next) => (c.req.path.startsWith("/api/payments/qpay/callback/") ? next() : csrfCheck(c, next)));
 
 // Drizzle: route бүрт `c.var.db`
 app.use("*", async (c, next) => {
@@ -76,6 +79,8 @@ app.route("/auth", authRoutes);
 app.route("/posts", postRoutes);
 app.route("/uploads", uploadsRoutes);
 app.route("/agents", agentRoutes);
+// /posts/:id/payment ба /payments — routes/payments.ts
+app.route("/", paymentRoutes);
 // /posts/:id/reports ба /reports — routes/reports.ts
 app.route("/", reportRoutes);
 // /posts/:id/inquiries ба /inquiries — routes/inquiries.ts

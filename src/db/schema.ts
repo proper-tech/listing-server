@@ -4,5 +4,6 @@
 export * from "./agents.schema.ts";
 export * from "./inquiries.schema.ts";
 export * from "./login-attempts.schema.ts";
+export * from "./payments.schema.ts";
 export * from "./posts.schema.ts";
 export * from "./reports.schema.ts";
